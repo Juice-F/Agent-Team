@@ -9,17 +9,6 @@ type ReceiveEvent = Parameters<
   NonNullable<lark.EventHandles["im.message.receive_v1"]>
 >[0];
 type Message = ReceiveEvent["message"];
-type Sender = ReceiveEvent["sender"];
-
-/**
- * 机器人发的消息，飞书标的是 `bot`。
- *
- * 文档里另有 `app` 这个取值，实测群里机器人发言给的是 `bot`——两个都认，免得哪天
- * 换了又悄悄失效。这个判断错了后果很隐蔽：交棒消息会被当成人在说话，各 agent 里
- * `if (ctx.message)` 的分支全反过来。
- */
-const BOT_SENDERS = new Set(["bot", "app"]);
-
 export interface Posted {
   messageId: string;
   threadId: string | null;
@@ -230,10 +219,6 @@ export class FeishuChannel {
 
   private mentionsMe(message: Message): boolean {
     return (message.mentions ?? []).some((m) => m.id?.open_id === this.openId);
-  }
-
-  private isBot(sender: Sender): boolean {
-    return !!sender.sender_type && BOT_SENDERS.has(sender.sender_type);
   }
 
   private async receive(data: ReceiveEvent): Promise<void> {
