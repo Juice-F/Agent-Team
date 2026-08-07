@@ -91,8 +91,10 @@ export class TriageAgent extends BaseAgent {
           { role: "assistant", text: result.reply },
         ],
       },
-      // 方案是产品那一棒的产物，立项时还没有
+      // 方案和审查意见都是下游那几棒的产物，立项时还没有
       plan: "",
+      reviewNote: "",
+      acceptNote: "",
       stage,
       phase: "pending",
       // 起跑时手里那张交接单，记在起跑那一棒名下。from 是 null——不是谁交下来的。

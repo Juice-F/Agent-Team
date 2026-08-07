@@ -1,10 +1,16 @@
+import { config } from "../../config.js";
 import { modelFor, type OnProgress } from "../../model/index.js";
 import type { Inbound, StepContext, StepResult } from "../../types.js";
 import type { Turn } from "../../store/index.js";
 import { BaseAgent } from "../base.js";
 import * as cards from "./cards.js";
-import { SYSTEM } from "./prompt.js";
-import { ProductOutputSchema, type ProductOutput } from "./schema.js";
+import { ACCEPT_SYSTEM, SPEC_SYSTEM } from "./prompt.js";
+import {
+  AcceptOutputSchema,
+  ProductOutputSchema,
+  type AcceptOutput,
+  type ProductOutput,
+} from "./schema.js";
 
 /**
  *
@@ -22,7 +28,7 @@ export class ProductAgent extends BaseAgent {
       case "spec":
         return this.spec(ctx);
       case "accepting":
-        return this.pending(ctx, `验收：${ctx.input.summary}`);
+        return this.accept(ctx);
       default:
         return { kind: "wait" };
     }
@@ -122,9 +128,94 @@ export class ProductAgent extends BaseAgent {
     );
 
     return modelFor("product").generate({
-      system: SYSTEM,
+      system: SPEC_SYSTEM,
       user: parts.join("\n\n"),
       schema: ProductOutputSchema,
+      onProgress,
+      signal: ctx.signal,
+    });
+  }
+
+  /**
+   * 验收一轮。
+   *
+   * 两条出路都要人点一下才走：收工是终点，打回是产品重拆、研发重写、审查重看
+   * 整整一圈。哪条都不该由模型自己拍板——最后签字的是提需求的人。
+   *
+   * 卡片上只有一个「确认」按钮，点下去往哪走看 acceptNote 空不空：产品判没过时
+   * 会把重拆用的新需求写进去，判过了就清空。
+   */
+  private async accept(ctx: AcceptingContext): Promise<StepResult> {
+    if (ctx.message?.confirmed) {
+      if (ctx.task.acceptNote) {
+        await this.bot.replyCard(
+          ctx.task.rootMessageId,
+          cards.reopened(ctx.task),
+          { inThread: true },
+        );
+        return {
+          kind: "next",
+          to: "spec",
+          output: { title: ctx.task.title, request: ctx.task.acceptNote },
+          // 交回去的是一份新需求，不是让人返工的方案——所以 request 本身也换掉，
+          // 重拆那一棒往后看到的都该是这一版。用掉就清，别留到下一轮。
+          patch: { request: ctx.task.acceptNote, acceptNote: "" },
+        };
+      }
+
+      await this.bot.replyCard(
+        ctx.task.rootMessageId,
+        cards.finished(ctx.task),
+        { inThread: true },
+      );
+      // done 那一棒没人认领，summary 只是留个结论在盘上
+      return { kind: "next", to: "done", output: { summary: ctx.input.summary } };
+    }
+
+    const posted = await this.bot.replyCard(
+      ctx.task.rootMessageId,
+      cards.checking(),
+      { inThread: true },
+    );
+    const progress = this.bot.trackProgress(posted.messageId, cards.checking);
+
+    let result: AcceptOutput;
+    try {
+      result = await this.check(ctx, progress.on);
+    } catch (err) {
+      await this.bot.patchCard(posted.messageId, cards.checkFailed());
+      throw err;
+    } finally {
+      progress.stop();
+    }
+
+    if (result.verdict === "pass") {
+      await this.bot.patchCard(posted.messageId, cards.checked(ctx.task, result));
+      // 清空是必须的：上一轮打回留下的那份还在的话，这次点「收工」会被当成打回
+      return { kind: "wait", patch: { acceptNote: "" } };
+    }
+
+    await this.bot.patchCard(posted.messageId, cards.unchecked(ctx.task, result));
+    return { kind: "wait", patch: { acceptNote: result.request } };
+  }
+
+  private check(
+    ctx: AcceptingContext,
+    onProgress: OnProgress,
+  ): Promise<AcceptOutput> {
+    const parts = [
+      `需求：${ctx.task.title}`,
+      `用户当初要的：\n${ctx.task.request}`,
+      `你自己拆的方案：\n${ctx.task.plan}`,
+      `研发做完、审查也过了，交上来的说明：\n${ctx.input.summary}`,
+    ];
+
+    return modelFor("product").generate({
+      system: ACCEPT_SYSTEM,
+      user: parts.join("\n\n"),
+      schema: AcceptOutputSchema,
+      // 验收得看真东西，但不许动——发现没做到是提出来，不是自己顺手补上
+      repo: { path: config.targetRepo, write: false },
       onProgress,
       signal: ctx.signal,
     });
@@ -132,3 +223,4 @@ export class ProductAgent extends BaseAgent {
 }
 
 type SpecContext = Extract<StepContext, { stage: "spec" }>;
+type AcceptingContext = Extract<StepContext, { stage: "accepting" }>;

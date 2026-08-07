@@ -73,8 +73,8 @@ export class DevAgent extends BaseAgent {
       system: SYSTEM,
       user: parts.join("\n\n"),
       schema: DevOutputSchema,
-      // 唯一一处放开工具的调用：代码得真的写进这个仓库
-      repo: config.targetRepo,
+      // 唯一一处放开写权限的调用：代码得真的落进这个仓库
+      repo: { path: config.targetRepo, write: true },
       onProgress,
       signal: ctx.signal,
     });

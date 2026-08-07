@@ -37,16 +37,17 @@ export class CodexModel extends Model {
 
       const { stdout, stderr, code } = await this.run({
         bin: this.bin(),
-        // 要动代码就在目标仓库里跑；纯生成留在临时目录，碰不到任何仓库
-        cwd: opts.repo ?? dir,
+        // 要看/要动代码就在目标仓库里跑；纯生成留在临时目录，碰不到任何仓库
+        cwd: opts.repo?.path ?? dir,
         stdin: `${opts.system}\n\n---\n\n${opts.user}`,
         signal: opts.signal,
         args: [
           "exec",
           "--skip-git-repo-check",
           "--sandbox",
-          // workspace-write 只放开 cwd，出了这个目录照样写不了
-          opts.repo ? "workspace-write" : "read-only",
+          // 沙箱是真的，操作系统层面拦：workspace-write 只放开 cwd，read-only
+          // 让它跑得了 git diff 但一个字节都落不了盘
+          opts.repo?.write ? "workspace-write" : "read-only",
           "--color",
           "never",
           "--model",

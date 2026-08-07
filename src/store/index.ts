@@ -44,6 +44,20 @@ export const SessionSchema = z.object({
    * 是用户眼前确认过的那一版，不能确认完再问一次模型重新生成。
    */
   plan: z.string().default(""),
+  /**
+   * 审查这一版的打回意见，等用户在卡片上点确认才真的返工。
+   *
+   * 落盘理由同 plan：卡片发出去要等人点，这一等可能跨进程重启。交回 coding 的
+   * 那一刻就清空——留着的话下一轮审查通过了它还在，会被当成新意见带回去。
+   */
+  reviewNote: z.string().default(""),
+  /**
+   * 验收没过时，产品重新写出来的那份需求，等用户点确认才真的回去重拆。
+   *
+   * 它同时是个开关：验收那张卡片上的按钮只有一个「确认」，点下去是收工还是打回，
+   * 就看这里空不空——空的是通过，有东西的是没过。
+   */
+  acceptNote: z.string().default(""),
   /** 流程走到哪了。图在 src/workflow/index.ts，谁认领这个阶段引擎那儿查。 */
   stage: WorkflowStageEnum,
   /**

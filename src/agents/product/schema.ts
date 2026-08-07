@@ -26,3 +26,32 @@ export const ProductOutputSchema = z.object({
   reply: z.string().describe("回给用户的话，一到两句"),
 });
 export type ProductOutput = z.infer<typeof ProductOutputSchema>;
+
+/**
+ * 验收一轮的结论。
+ *
+ * 判的是「用户要的东西做出来了没有」，不是代码好不好——那是审查那一棒的活，而且
+ * 走到这儿说明它已经过了。
+ */
+export const AcceptOutputSchema = z.object({
+  verdict: z
+    .enum(["pass", "reject"])
+    .describe(
+      "pass = 需求做到了，可以收工；reject = 有该做的没做到，得回去重新拆一遍",
+    ),
+  summary: z
+    .string()
+    .describe("验收结论，两三句。写给提需求的人看，说清做出来的是什么、够不够用"),
+  gaps: z
+    .array(z.string())
+    .default([])
+    .describe(
+      "verdict 为 reject 时，一条一句列出哪些要求没做到；pass 时给空数组",
+    ),
+  request: z
+    .string()
+    .describe(
+      "verdict 为 reject 时，把「这次到底要什么」重写成一段完整需求，产品拿它从头重拆。要把已经做好的部分和这次要补的都算进去，不要只写缺口。pass 时给空字符串",
+    ),
+});
+export type AcceptOutput = z.infer<typeof AcceptOutputSchema>;

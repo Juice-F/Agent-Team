@@ -157,12 +157,15 @@ export class Runner {
     }
 
     if (result.patch) {
-      const { title, request, plan, turns } = result.patch;
+      const { title, request, plan, reviewNote, acceptNote, turns } =
+        result.patch;
       current = {
         ...current,
         ...(title !== undefined && { title }),
         ...(request !== undefined && { request }),
         ...(plan !== undefined && { plan }),
+        ...(reviewNote !== undefined && { reviewNote }),
+        ...(acceptNote !== undefined && { acceptNote }),
         // 一棒交上来的是自己那一段，按它当前所在的阶段归位——写不到别人头上
         ...(turns && { turns: { ...current.turns, [current.stage]: turns } }),
       };

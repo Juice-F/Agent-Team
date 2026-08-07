@@ -46,7 +46,9 @@ type Payloads = {
 };
 
 /** 一棒能改的任务字段。stage 不在里面：走到哪由引擎按图推，不许自己写。 */
-export type TaskPatch = Partial<Pick<Session, "title" | "request" | "plan">> & {
+export type TaskPatch = Partial<
+  Pick<Session, "title" | "request" | "plan" | "reviewNote" | "acceptNote">
+> & {
   /**
    * 自己这一棒和用户的往返，整段覆盖。
    *
