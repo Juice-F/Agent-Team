@@ -37,14 +37,16 @@ export class CodexModel extends Model {
 
       const { stdout, stderr, code } = await this.run({
         bin: this.bin(),
-        cwd: dir,
+        // 要动代码就在目标仓库里跑；纯生成留在临时目录，碰不到任何仓库
+        cwd: opts.repo ?? dir,
         stdin: `${opts.system}\n\n---\n\n${opts.user}`,
         signal: opts.signal,
         args: [
           "exec",
           "--skip-git-repo-check",
           "--sandbox",
-          "read-only",
+          // workspace-write 只放开 cwd，出了这个目录照样写不了
+          opts.repo ? "workspace-write" : "read-only",
           "--color",
           "never",
           "--model",

@@ -55,10 +55,12 @@ export class ClaudeModel extends Model {
   async generate<T extends z.ZodType>(
     opts: GenerateOptions<T>,
   ): Promise<z.infer<T>> {
+    const repo = opts.repo;
     const { stdout, stderr, code } = await this.run({
       bin: this.bin(),
-      // 放在临时目录跑，避免把本仓库的 CLAUDE.md / git 状态带进上下文
-      cwd: tmpdir(),
+      // 纯生成放在临时目录跑，避免把本仓库的 CLAUDE.md / git 状态带进上下文；
+      // 要动代码就得在目标仓库里跑，那份上下文反过来正是要的
+      cwd: repo ?? tmpdir(),
       stdin: opts.user,
       signal: opts.signal,
       onLine: opts.onProgress && ((line) => this.report(line, opts.onProgress!)),
@@ -68,12 +70,9 @@ export class ClaudeModel extends Model {
         "stream-json",
         "--verbose",
         "--include-partial-messages",
-        "--system-prompt",
-        opts.system,
+        ...(repo ? this.workingArgs(opts.system) : this.pureArgs(opts.system)),
         "--json-schema",
         JSON.stringify(this.toJsonSchema(opts.schema)),
-        "--tools",
-        "",
         "--model",
         this.spec.model,
         "--effort",
@@ -97,6 +96,34 @@ export class ClaudeModel extends Model {
     }
 
     return this.validate(opts.schema, this.payloadOf(result));
+  }
+
+  /**
+   * 纯生成：整个换掉默认系统提示，省掉约 9000 token 的固定开销；工具全关。
+   */
+  private pureArgs(system: string): string[] {
+    return ["--system-prompt", system, "--tools", ""];
+  }
+
+  /**
+   * 在仓库里干活：工具全开。
+   *
+   * 系统提示只能追加不能替换——换掉的话 Claude Code 自带的那套工具使用规则也
+   * 一起没了，它就不知道该怎么读文件、怎么改。
+   *
+   * bypassPermissions 是必须的：headless 下没人能点确认，不放开的话工具调用会
+   * 被直接拒掉，模型只会干看着。代价是它在 TARGET_REPO 里可以任意读写和执行
+   * 命令——这条路本来就是「让 AI 自己改代码」，风险在需求里，不在这行参数里。
+   */
+  private workingArgs(system: string): string[] {
+    return [
+      "--append-system-prompt",
+      system,
+      "--tools",
+      "default",
+      "--permission-mode",
+      "bypassPermissions",
+    ];
   }
 
   private bin(): string {

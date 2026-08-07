@@ -17,6 +17,13 @@ export interface GenerateOptions<T extends z.ZodType> {
   system: string;
   user: string;
   schema: T;
+  /**
+   * 让模型动手改代码的仓库目录。
+   *
+   * 不给就是纯生成：关掉所有工具、跑在临时目录，碰不到任何仓库——判断、拆需求
+   * 那几棒都是这样。给了就在这个目录里放开工具跑，写代码那一棒必须这样。
+   */
+  repo?: string;
   /** 不传就什么都不报，模型层不自己往控制台打 */
   onProgress?: OnProgress;
   /**

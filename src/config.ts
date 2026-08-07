@@ -32,7 +32,7 @@ export const config = {
       provider: "claude",
       model: "claude-opus-5",
       effort: "high",
-      timeoutMs: 1200_000
+      timeoutMs: 3600_000
     },
     review: { 
       provider: "codex",
