@@ -1,9 +1,11 @@
-import { jobLabelMap, config, feishu, type AgentJob } from "./config.js";
-import { FeishuChannel } from "./feishu/index.js";
+import { jobLabelMap, config } from "./config.js";
 import { modelFor } from "./model/index.js";
+import { taskStore } from "./store/task.js";
 import { workflow } from "./workflow.js";
-import { TriageHandler } from "./agents/triage/index.js";
-import { ProductHandler } from "./agents/product/index.js";
+import { type AgentJob } from "./type.js";
+import { type Runner } from "./workflow/index.js";
+
+let runner: Runner | null = null;
 
 async function main(): Promise<void> {
   console.log("Agent Team");
@@ -15,30 +17,17 @@ async function main(): Promise<void> {
       `  ${label}  ${spec.model} / effort ${spec.effort} / ${spec.timeoutMs / 1000}s`,
     );
   }
-  console.log("\n流程");
-  console.log(workflow.describe());
-  console.log("");
 
-  const bots = {
-    triage: new FeishuChannel("triage", feishu.triage),
-    product: new FeishuChannel("product", feishu.product),
-    dev: new FeishuChannel("dev", feishu.dev),
-    review: new FeishuChannel("review", feishu.review),
-  };
-
-  await Promise.all([
-    bots.triage.start(new TriageHandler(bots.triage)),
-    bots.product.start(new ProductHandler(bots.product)),
-    bots.dev.start(),
-    bots.review.start(),
-  ]);
-
+  // 拉起所有角色的服务，顺便把上次中断在半路的任务捡回来接着跑
+  runner = await workflow.run(taskStore);
   console.log("\n群里 @ 话题助手说需求，它判断该不该立项。Ctrl+C 退出。\n");
 }
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
-    console.log("\n正在退出…");
+    // 掐掉正在跑的模型调用。任务文件这时还写着 running，下次启动照样捡得回来，
+    const stopped = runner?.interruptAll("进程退出") ?? 0;
+    console.log(stopped ? `\n正在退出…（中断 ${stopped} 个任务）` : "\n正在退出…");
     process.exit(0);
   });
 }

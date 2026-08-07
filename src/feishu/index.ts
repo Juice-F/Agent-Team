@@ -1,5 +1,6 @@
 import * as lark from "@larksuiteoapi/node-sdk";
-import { jobLabelMap, type AgentJob } from "../config.js";
+import { jobLabelMap } from "../config.js";
+import type { AgentJob } from "../type.js";
 import { enqueue, isDuplicate } from "../store/queue.js";
 import type { Card } from "./card.js";
 import type { OnProgress } from "../model/index.js";

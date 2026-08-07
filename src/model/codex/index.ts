@@ -39,6 +39,7 @@ export class CodexModel extends Model {
         bin: this.bin(),
         cwd: dir,
         stdin: `${opts.system}\n\n---\n\n${opts.user}`,
+        signal: opts.signal,
         args: [
           "exec",
           "--skip-git-repo-check",

@@ -1,4 +1,5 @@
-import { config, type AgentJob } from "../config.js";
+import { config } from "../config.js";
+import type { AgentJob } from "../type.js";
 import { Model } from "./base.js";
 import { ClaudeModel } from "./claude/index.js";
 import { CodexModel } from "./codex/index.js";

@@ -1,14 +1,5 @@
 import "dotenv/config";
-
-export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
-export type Provider = "claude" | "codex";
-export type AgentJob = "triage" | "product" | "dev" | "review";
-export interface AgentSpec {
-  provider: Provider;
-  model: string;
-  effort: Effort;
-  timeoutMs: number;
-}
+import type { AgentJob, AgentSpec } from "./type.js";
 
 function required(name: string): string {
   const value = process.env[name];

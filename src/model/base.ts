@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { z } from "zod";
-import type { AgentSpec } from "../config.js";
+import type { AgentSpec } from "../type.js";
 
 export class ModelError extends Error {}
 
@@ -19,6 +19,13 @@ export interface GenerateOptions<T extends z.ZodType> {
   schema: T;
   /** 不传就什么都不报，模型层不自己往控制台打 */
   onProgress?: OnProgress;
+  /**
+   * 中断信号，一路从流程那边带下来。
+   *
+   * abort 之后 CLI 子进程立刻被杀掉——一次调用能跑十几分钟，不真把进程干掉，
+   * 「中断」就只是嘴上说说，模型还在那儿烧着额度。
+   */
+  signal?: AbortSignal;
 }
 
 export interface RunResult {
@@ -77,6 +84,7 @@ export abstract class Model {
     stdin: string;
     cwd: string;
     onLine?: (line: string) => void;
+    signal?: AbortSignal;
   }): Promise<RunResult> {
     return new Promise((resolve, reject) => {
       const child = spawn(input.bin, input.args, {
@@ -92,6 +100,7 @@ export abstract class Model {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        input.signal?.removeEventListener("abort", onAbort);
         if (err) reject(err);
         else resolve(value!);
       };
@@ -104,6 +113,20 @@ export abstract class Model {
           ),
         );
       }, this.spec.timeoutMs);
+
+      // 中断的理由由上游给（比如「进程退出」），原样抛出去，别包成超时之类的
+      const onAbort = () => {
+        child.kill();
+        const reason: unknown = input.signal?.reason;
+        finish(
+          reason instanceof Error
+            ? reason
+            : new ModelError(`${this.name} 调用被中断`),
+        );
+      };
+      input.signal?.addEventListener("abort", onAbort, { once: true });
+      // 进这个函数之前就已经 abort 了的话，事件不会再来一次
+      if (input.signal?.aborted) onAbort();
 
       let pending = "";
       child.stdout.setEncoding("utf8");

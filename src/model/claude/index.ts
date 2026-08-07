@@ -60,6 +60,7 @@ export class ClaudeModel extends Model {
       // 放在临时目录跑，避免把本仓库的 CLAUDE.md / git 状态带进上下文
       cwd: tmpdir(),
       stdin: opts.user,
+      signal: opts.signal,
       onLine: opts.onProgress && ((line) => this.report(line, opts.onProgress!)),
       args: [
         "-p",
