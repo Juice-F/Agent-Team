@@ -1,5 +1,5 @@
 import "dotenv/config";
-import type { AgentJob, AgentSpec } from "./type.js";
+import type { AgentJob, AgentSpec } from "./types.js";
 
 function required(name: string): string {
   const value = process.env[name];

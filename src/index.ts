@@ -1,9 +1,9 @@
 import { jobLabelMap, config } from "./config.js";
 import { modelFor } from "./model/index.js";
-import { taskStore } from "./store/task.js";
-import { workflow } from "./workflow.js";
-import { type AgentJob } from "./type.js";
-import { type Runner } from "./workflow/index.js";
+import { taskStore } from "./store/index.js";
+import { workflow } from "./workflow/index.js";
+import { type AgentJob } from "./types.js";
+import { type Runner } from "./workflow/runner.js";
 
 let runner: Runner | null = null;
 
@@ -20,7 +20,7 @@ async function main(): Promise<void> {
 
   // 拉起所有角色的服务，顺便把上次中断在半路的任务捡回来接着跑
   runner = await workflow.run(taskStore);
-  console.log("\n群里 @ 话题助手说需求，它判断该不该立项。Ctrl+C 退出。\n");
+  console.log("\n群里直接说需求，话题助手会判断该不该立项。Ctrl+C 退出。\n");
 }
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {

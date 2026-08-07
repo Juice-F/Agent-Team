@@ -1,7 +1,7 @@
 import * as lark from "@larksuiteoapi/node-sdk";
 import { jobLabelMap } from "../config.js";
-import type { AgentJob } from "../type.js";
-import { enqueue, isDuplicate } from "../store/queue.js";
+import type { AgentJob, Inbound } from "../types.js";
+import { enqueue, isDuplicate } from "../utils/queue.js";
 import type { Card } from "./card.js";
 import type { OnProgress } from "../model/index.js";
 
@@ -9,19 +9,20 @@ type ReceiveEvent = Parameters<
   NonNullable<lark.EventHandles["im.message.receive_v1"]>
 >[0];
 type Message = ReceiveEvent["message"];
+type Sender = ReceiveEvent["sender"];
+
+/**
+ * 机器人发的消息，飞书标的是 `bot`。
+ *
+ * 文档里另有 `app` 这个取值，实测群里机器人发言给的是 `bot`——两个都认，免得哪天
+ * 换了又悄悄失效。这个判断错了后果很隐蔽：交棒消息会被当成人在说话，各 agent 里
+ * `if (ctx.message)` 的分支全反过来。
+ */
+const BOT_SENDERS = new Set(["bot", "app"]);
 
 export interface Posted {
   messageId: string;
   threadId: string | null;
-}
-
-/** 收到的一条消息，已经把飞书那层壳剥干净 */
-export interface Inbound {
-  /** 剥掉 @ 占位符之后的正文 */
-  text: string;
-  /** 回复时的锚点 */
-  messageId: string;
-  chatId: string;
 }
 
 /**
@@ -31,8 +32,8 @@ export interface Inbound {
  * 各写各的。方向是单向的：agents 依赖 feishu，feishu 不认识 agents。
  */
 export interface ChannelHandler {
-  /** 主群里 @ 了我的消息 */
-  onMention?(msg: Inbound): Promise<void>;
+  /** 主群里的消息（不在任何话题内）。@ 不 @ 我都算。 */
+  onGroup?(msg: Inbound): Promise<void>;
   /** 话题内的消息。已按话题串行，同一话题不会并发进来。 */
   onThread?(threadId: string, msg: Inbound): Promise<void>;
 }
@@ -49,10 +50,11 @@ export class FeishuChannel {
   private readonly client: lark.Client;
   private readonly ws: lark.WSClient;
   private handler: ChannelHandler = {};
+  openId: string | null = null;
 
   constructor(
     readonly role: AgentJob,
-    cred: {
+    readonly cred: {
       appId: string;
       appSecret: string;
     },
@@ -71,11 +73,24 @@ export class FeishuChannel {
     });
   }
 
+  async resolveOpenId(): Promise<void> {
+    const res = (await this.client.request({
+      method: "GET",
+      url: "/open-apis/bot/v3/info",
+    })) as { bot?: { open_id?: string } } | undefined;
+
+    this.openId = res?.bot?.open_id ?? null;
+    if (!this.openId) {
+      throw new Error(
+        `「${jobLabelMap[this.role]}」问不到自己的 open_id，别的角色 @ 不到它，流程会卡住`,
+      );
+    }
+  }
+
   async start(handler: ChannelHandler = {}): Promise<void> {
     this.handler = handler;
     const dispatcher = new lark.EventDispatcher({}).register({
       "im.message.receive_v1": (data) => {
-        // 不 await：receive 一返回 SDK 就 ack，耗时的活丢到后台，避免飞书超时重推
         void this.receive(data).catch((err: unknown) => {
           console.error(`[${this.role}]`, err);
         });
@@ -212,18 +227,23 @@ export class FeishuChannel {
     }
   }
 
-  private isMentioned(message: Message): boolean {
-    return (message.mentions ?? []).length > 0;
+
+  private mentionsMe(message: Message): boolean {
+    return (message.mentions ?? []).some((m) => m.id?.open_id === this.openId);
+  }
+
+  private isBot(sender: Sender): boolean {
+    return !!sender.sender_type && BOT_SENDERS.has(sender.sender_type);
   }
 
   private async receive(data: ReceiveEvent): Promise<void> {
     const { message, sender } = data;
 
-    // 机器人发的消息（含自己刚发出去的回复）一律跳过，否则自循环。
-    // 多 bot 互相艾特协作时，这里要收窄成「只排除自己的 open_id」。
-    if (sender.sender_type === "app") return;
-
-    if (isDuplicate(data.event_id)) return;
+    // 按角色去重：四个应用各收各的
+    if (isDuplicate(this.role, data.event_id)) return;
+    
+    if (sender.sender_id?.open_id === this.openId) return;
+    if (sender.sender_type === "bot" && !this.mentionsMe(message)) return;
     if (message.message_type !== "text") return;
 
     const text = this.extractText(message);
@@ -234,19 +254,19 @@ export class FeishuChannel {
       text,
       messageId: message.message_id,
       chatId: message.chat_id,
+      fromBot: sender.sender_type === "bot",
     };
 
     const threadId = message.thread_id;
     if (threadId) {
       const onThread = this.handler.onThread;
       if (!onThread) return;
-      // 同一话题串行，不同话题并发
       await enqueue(threadId, () => onThread.call(this.handler, threadId, inbound));
       return;
     }
 
-    // 主群裸消息必须 @ 才响应，否则群里正常聊天全被接管
-    if (!this.isMentioned(message)) return;
-    await this.handler.onMention?.(inbound);
+    if (this.mentionsMe(message) || !message.mentions?.length) {
+      await this.handler.onGroup?.(inbound);
+    }
   }
 }

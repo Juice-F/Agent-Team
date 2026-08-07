@@ -1,5 +1,5 @@
 import { generateCard, type Card } from "../../feishu/card.js";
-import type { Task } from "../../store/task.js";
+import type { Task } from "../../store/index.js";
 
 export function thinking(detail?: string): Card {
   return generateCard({ tone: "progress", title: "思考中", detail });

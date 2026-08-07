@@ -1,26 +1,19 @@
 import { modelFor, type OnProgress } from "../../model/index.js";
-import type { ChannelHandler, Inbound } from "../../feishu/index.js";
-import { makeTaskId, saveTask, type Task, type Turn } from "../../store/task.js";
-import type { Engine, StageContext, StepResult } from "../../workflow/index.js";
+import type { Inbound, StepContext, StepResult } from "../../types.js";
+import { taskStore, type Task, type Turn } from "../../store/index.js";
 import { BaseAgent } from "../base.js";
 import * as cards from "./cards.js";
 import { SYSTEM } from "./prompt.js";
 import { TriageOutputSchema, type TriageOutput } from "./schema.js";
 
-/**
- * 话题助手。
- *
- * 认领 clarifying 那一棒——需求还没问清楚，在话题里接着问，问清楚了就交给产品。
- * 另外它还管一个不属于流程的入口：主群里被 @ 到时判断该不该立项。流程的每一棒
- * 都是「任务已经存在，推它往前走」，而立项要判断的恰恰是「该不该有这个任务」，
- * 判完才有单子，有了单子才轮到引擎。
- */
-export class TriageAgent extends BaseAgent<"clarifying"> {
+export class TriageAgent extends BaseAgent {
   constructor() {
     super("triage", ["clarifying"]);
   }
 
-  async run(ctx: StageContext<"clarifying">): Promise<StepResult> {
+  async run(ctx: StepContext): Promise<StepResult> {
+    // 引擎只拿 handles 里的阶段来叫，这句挡的是类型
+    if (ctx.stage !== "clarifying") return { kind: "wait" };
     // 没有触发消息 = 刚开话题，追问已经发出去了，等人回话
     if (!ctx.message) return { kind: "wait" };
 
@@ -63,16 +56,7 @@ export class TriageAgent extends BaseAgent<"clarifying"> {
     };
   }
 
-  /** 除了话题消息，还要收主群里 @ 自己的那条 —— 立项入口 */
-  protected override channel(engine: Engine): ChannelHandler {
-    return {
-      ...super.channel(engine),
-      onMention: (msg) => this.onMention(msg),
-    };
-  }
-
-  /** 主群 @ → 判断该不该立项，立了就把单子交给引擎 */
-  private async onMention(msg: Inbound): Promise<void> {
+  protected override async onGroup(msg: Inbound): Promise<void> {
     const { card, result } = await this.think(msg);
 
     if (result.verdict === "chat") {
@@ -95,7 +79,7 @@ export class TriageAgent extends BaseAgent<"clarifying"> {
     // 起点：说清楚了就直接进产品那一环，没说清就先留在澄清
     const stage = result.verdict === "task" ? "spec" : "clarifying";
     const task: Task = {
-      id: makeTaskId(new Date(), msg.messageId),
+      id: taskStore.makeId(new Date(), msg.messageId),
       threadId: opened.threadId,
       chatId: msg.chatId,
       rootMessageId: msg.messageId,
@@ -112,7 +96,7 @@ export class TriageAgent extends BaseAgent<"clarifying"> {
       createdAt: now,
       updatedAt: now,
     };
-    await saveTask(task);
+    await taskStore.save(task);
 
     if (stage === "clarifying") {
       await this.bot.patchCard(card, cards.threadOpened());
@@ -124,7 +108,7 @@ export class TriageAgent extends BaseAgent<"clarifying"> {
       inThread: true,
     });
     // 交给引擎，后面几棒它自己按图推
-    await this.engine.resume(task);
+    await this.runner.resume(task, this);
   }
 
   /**
@@ -174,7 +158,6 @@ export class TriageAgent extends BaseAgent<"clarifying"> {
         result: await this.decide([], msg.text, progress.on),
       };
     } catch (err) {
-      // 模型挂了也得给个交代，否则那张「思考中」会永远停在那
       await this.bot.patchCard(posted.messageId, cards.failed()).catch(() => {});
       throw err;
     } finally {

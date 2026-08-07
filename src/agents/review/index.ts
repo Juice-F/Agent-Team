@@ -1,4 +1,4 @@
-import type { StageContext, StepResult } from "../../workflow/index.js";
+import type { Inbound, StepContext, StepResult } from "../../types.js";
 import { BaseAgent } from "../base.js";
 
 /**
@@ -9,12 +9,16 @@ import { BaseAgent } from "../base.js";
  *
  * 还是占位。
  */
-export class ReviewAgent extends BaseAgent<"review"> {
+export class ReviewAgent extends BaseAgent {
   constructor() {
     super("review", ["review"]);
   }
 
-  async run(ctx: StageContext<"review">): Promise<StepResult> {
+  async run(ctx: StepContext): Promise<StepResult> {
+    // 引擎只拿 handles 里的阶段来叫，这句挡的是类型
+    if (ctx.stage !== "review") return { kind: "wait" };
     return this.pending(ctx, `审查：${ctx.input.summary}`);
   }
+
+  protected async onGroup(_msg: Inbound): Promise<void> {}
 }

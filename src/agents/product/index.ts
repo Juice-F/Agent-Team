@@ -1,4 +1,4 @@
-import type { StageContext, StepResult } from "../../workflow/index.js";
+import type { Inbound, StepContext, StepResult } from "../../types.js";
 import { BaseAgent } from "../base.js";
 
 /**
@@ -17,17 +17,22 @@ import { BaseAgent } from "../base.js";
  * 两棒都还是占位。真接进来的时候只改这个文件：阶段、边、交接单的形状都已经在
  * 别处说好了。
  */
-export class ProductAgent extends BaseAgent<"spec" | "accepting"> {
+export class ProductAgent extends BaseAgent {
   constructor() {
     super("product", ["spec", "accepting"]);
   }
 
-  async run(ctx: StageContext<"spec" | "accepting">): Promise<StepResult> {
+  async run(ctx: StepContext): Promise<StepResult> {
     switch (ctx.stage) {
       case "spec":
         return this.pending(ctx, `拆解「${ctx.input.title || ctx.task.title}」`);
       case "accepting":
         return this.pending(ctx, `验收：${ctx.input.summary}`);
+      // 引擎只拿 handles 里的阶段来叫，走不到这儿
+      default:
+        return { kind: "wait" };
     }
   }
+
+  protected async onGroup(_msg: Inbound): Promise<void> {}
 }

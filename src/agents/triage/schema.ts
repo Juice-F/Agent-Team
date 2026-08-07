@@ -5,7 +5,7 @@ import { z } from "zod";
  *
  * 每个角色都有自己的一份——话题助手判断该不该立项，产品产出 tasks.md，研发产出
  * diff，形状差得远，不放在一个公共 store 里凑合。任务本身那张单子在
- * store/task.ts，阶段之间传的交接单在 workflow.ts，都不是这里的事。
+ * store/index.ts，阶段之间传的交接单在 schema.ts，都不是这里的事。
  */
 
 export const TriageOutputSchema = z.object({

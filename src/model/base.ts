@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { z } from "zod";
-import type { AgentSpec } from "../type.js";
+import type { AgentSpec } from "../types.js";
 
 export class ModelError extends Error {}
 
