@@ -104,70 +104,47 @@ export class FeishuChannel {
     return this.post(messageId, "interactive", card, opts);
   }
 
-  private async call<T>(
-    what: string,
-    run: () => Promise<{ code?: number; msg?: string; data?: T }>,
-  ): Promise<T | undefined> {
-    const fail = (code: unknown, msg: unknown): never => {
-      throw new Error(
-        `「${jobLabelMap[this.role]}」${what}失败（code=${String(code)}）：${String(msg ?? "无描述")}`,
-      );
-    };
-
-    let res;
-    try {
-      res = await run();
-    } catch (err) {
-      const body = (
-        err as { response?: { data?: { code?: number; msg?: string } } }
-      )?.response?.data;
-      if (body?.msg) fail(body.code, body.msg);
-      throw err;
-    }
-    // 业务错误走的是 code !== 0，HTTP 200，不抛异常
-    if (res.code) fail(res.code, res.msg);
-    return res.data;
-  }
-
   private async post(
     messageId: string,
     msgType: "text" | "interactive",
     content: unknown,
     opts: { inThread?: boolean } = {},
   ): Promise<Posted> {
-    const data = await this.call("回复", () =>
-      this.client.im.v1.message.reply({
-        path: { message_id: messageId },
-        data: {
-          msg_type: msgType,
-          content: JSON.stringify(content),
-          reply_in_thread: opts.inThread ?? false,
-        },
-      }),
-    );
+    const res = await this.client.im.v1.message.reply({
+      path: { message_id: messageId },
+      data: {
+        msg_type: msgType,
+        content: JSON.stringify(content),
+        reply_in_thread: opts.inThread ?? false,
+      },
+    });
 
-    const id = data?.message_id;
-    if (!id) {
-      throw new Error(`「${jobLabelMap[this.role]}」回复成功但没有返回 message_id`);
+    const data = res.data;
+    if (!data?.message_id) {
+      throw new Error(
+        `「${jobLabelMap[this.role]}」回复失败（code=${String(res.code)}）：${res.msg ?? "无描述"}`,
+      );
     }
-    return { messageId: id, threadId: data.thread_id ?? null };
+    return { messageId: data.message_id, threadId: data.thread_id ?? null };
   }
 
   async patchCard(messageId: string, card: Card): Promise<void> {
-    await this.call("更新卡片", () =>
-      this.client.im.v1.message.patch({
+    try {
+      const res = await this.client.im.v1.message.patch({
         path: { message_id: messageId },
         data: { content: JSON.stringify(card) },
-      }),
-    );
+      });
+    
+      if (res.code) {
+        console.error(
+          `[${this.role}] 更新卡片失败（code=${String(res.code)}）：${res.msg ?? "无描述"}`,
+        );
+      }
+    } catch (err) {
+      console.error(`[${this.role}] 更新卡片失败`, err);
+    }
   }
 
-  /**
-   * 把模型的逐字流收成几次卡片更新。
-   *
-   * 卡片长什么样由调用方给——这一层只管节流和 patch，不拼卡片。render 收到的
-   * 是累积到当前为止的进度文本。
-   */
   trackProgress(
     messageId: string,
     render: (detail: string) => Card,
@@ -188,15 +165,10 @@ export class FeishuChannel {
 
         const detail = buffer.replace(/\s+/g, " ").trim().slice(-DETAIL_MAX);
         // 不 await：进度更新慢了不能拖住模型那条流
-        void this.patchCard(messageId, render(detail))
-          .catch((err: unknown) => {
-            console.error(`[${this.role}] 进度更新失败`, err);
-          })
-          .finally(() => {
-            inFlight = false;
-          });
+        void this.patchCard(messageId, render(detail)).finally(() => {
+          inFlight = false;
+        });
       },
-      // 停掉之后不再发新的 patch，免得和收尾那次抢同一张卡片
       stop: () => {
         stopped = true;
       },

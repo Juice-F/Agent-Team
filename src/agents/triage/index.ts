@@ -12,9 +12,7 @@ export class TriageAgent extends BaseAgent {
   }
 
   async run(ctx: StepContext): Promise<StepResult> {
-    // 引擎只拿 handles 里的阶段来叫，这句挡的是类型
     if (ctx.stage !== "clarifying") return { kind: "wait" };
-    // 没有触发消息 = 刚开话题，追问已经发出去了，等人回话
     if (!ctx.message) return { kind: "wait" };
 
     const result = await this.decide(
@@ -107,17 +105,10 @@ export class TriageAgent extends BaseAgent {
     await this.bot.replyCard(task.rootMessageId, cards.handOff(task), {
       inThread: true,
     });
-    // 交给引擎，后面几棒它自己按图推
+    // 直接开话题并立项，艾特产品经理接收任务
     await this.runner.resume(task, this);
   }
 
-  /**
-   * 判断 + 追问。
-   *
-   * history 是这个话题里已经发生的往返，空数组就是主群里的第一次判断。历史拼进
-   * prompt 而不是靠 CLI 的会话——`claude -p` 每次都是独立进程，而且我们要的上下
-   * 文本来就跟着任务落盘，进程重启后还得接着聊。
-   */
   private async decide(
     history: Turn[],
     request: string,
@@ -141,12 +132,6 @@ export class TriageAgent extends BaseAgent {
     });
   }
 
-  /**
-   * 发占位卡片 → 判断 → 进度打在卡片上。
-   *
-   * 只有主群那次用：CLI 冷启动加首字延迟能有十几秒，而用户刚 @ 完什么都没有，
-   * 这段必须有东西顶着。立项还没进流程，也就没有中断信号可带。
-   */
   private async think(
     msg: Inbound,
   ): Promise<{ card: string; result: TriageOutput }> {
@@ -158,7 +143,7 @@ export class TriageAgent extends BaseAgent {
         result: await this.decide([], msg.text, progress.on),
       };
     } catch (err) {
-      await this.bot.patchCard(posted.messageId, cards.failed()).catch(() => {});
+      await this.bot.patchCard(posted.messageId, cards.failed());
       throw err;
     } finally {
       progress.stop();
