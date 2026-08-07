@@ -23,6 +23,12 @@ const TONE_ICON: Record<CardTone, string> = {
   task: "🆕",
 };
 
+export interface CardButton {
+  text: string;
+  value: Record<string, unknown>;
+  primary?: boolean;
+}
+
 export interface CardInput {
   tone: CardTone;
   title: string;
@@ -38,8 +44,30 @@ export interface CardInput {
   /** 折叠面板里的长内容，比如思考链 */
   detail?: string;
   detailLabel?: string;
+  /** 要用户点一下才能定下来的选项 */
+  buttons?: CardButton[];
   /** 底部小字 */
   note?: string;
+}
+
+export function hasButtons(card: Card): boolean {
+  return card.body.elements.some((el) => el["tag"] === "button");
+}
+
+export function settleCard(card: Card, chosen: string): Card {
+  const elements: Record<string, unknown>[] = [];
+  let settled = false;
+  for (const element of card.body.elements) {
+    if (element["tag"] !== "button") {
+      elements.push(element);
+      continue;
+    }
+    // 一排按钮合成一行，不是每个按钮各换一行
+    if (settled) continue;
+    settled = true;
+    elements.push({ tag: "markdown", content: `**已选择：${chosen}**` });
+  }
+  return { ...card, body: { elements } };
 }
 
 export function generateCard(input: CardInput): Card {
@@ -70,6 +98,18 @@ export function generateCard(input: CardInput): Card {
         elements: [{ tag: "markdown", content: input.detail }],
       },
     ]);
+  }
+  if (input.buttons?.length) {
+    // 2.0 把 action 那个容器去掉了，按钮直接就是 body 里的一级元素，一个一行
+    sections.push(
+      input.buttons.map((button) => ({
+        tag: "button",
+        text: { tag: "plain_text", content: button.text },
+        type: button.primary ? "primary" : "default",
+        // callback 才会走事件回调回到进程里；url 之类的行为这儿用不上
+        behaviors: [{ type: "callback", value: button.value }],
+      })),
+    );
   }
   if (input.note) {
     sections.push([{ tag: "markdown", content: `*${input.note}*` }]);

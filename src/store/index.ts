@@ -4,30 +4,13 @@ import { z } from "zod";
 import { config } from "../config.js";
 import { WorkflowStageEnum } from "../schema.js";
 
-/**
- * 一个任务的全部状态，以及它的落盘。
- *
- * 一个话题 = 一个任务，按 thread_id 存一个文件。进程重启后话题里的消息还要能
- * 找回对应的任务，走到哪、上一棒交下来什么，都得在盘上。
- *
- * 这东西不属于哪个角色——它是在流程里流动的那张单子。写成类是留余地：往后各阶段
- * 会有各自要存的中间产物（产品的 tasks.md、研发的 diff），那些按阶段加方法，
- * 别都塞进这一张单子里。
- */
-
-/**
- * 澄清阶段的一来一回。
- *
- * 存下来是因为 `claude -p` 每次调用都是独立进程，没有会话——上下文只能由我们
- * 自己带。跟着任务落盘，进程重启后接着聊。
- */
 export const TurnSchema = z.object({
   role: z.enum(["user", "assistant"]),
   text: z.string(),
 });
 export type Turn = z.infer<typeof TurnSchema>;
 
-export const TaskSchema = z.object({
+export const SessionSchema = z.object({
   id: z.string(),
   /** 话题 ID，任务的主键 */
   threadId: z.string(),
@@ -35,7 +18,6 @@ export const TaskSchema = z.object({
   chatId: z.string(),
   /**
    * 主群里那条裸消息的 message_id，也就是话题的根。
-   * 之后往这个话题里发东西，一律 reply 到它 + reply_in_thread。
    */
   rootMessageId: z.string(),
   /** 话题助手给的短标题。clarifying 阶段可能还是空的 */
@@ -45,8 +27,23 @@ export const TaskSchema = z.object({
    * 复述——下游要看的是问清楚之后的版本，不是最初那句含糊的。
    */
   request: z.string(),
-  /** 澄清阶段的往返。立项之后不再追加，下游各自管自己的状态。 */
-  turns: z.array(TurnSchema).default([]),
+  /**
+   * 各阶段和用户的往返，按阶段分开存。
+   *
+   * 分开是因为它们不是一回事：澄清阶段问的是「你到底要什么」，spec 阶段问的是
+   * 「这个点怎么定」。混成一条的话，越往后的角色读到的越是一段掺着别人视角、
+   * 只会变长的对话；打回重来时也没办法只清掉自己那一段。
+   *
+   * 一棒只写得到自己那一段——引擎按当前阶段并进去，见 TaskPatch。
+   */
+  turns: z.partialRecord(WorkflowStageEnum, z.array(TurnSchema)).default({}),
+  /**
+   * 产品当前这一版方案，等用户在卡片上点确认。
+   *
+   * 得落盘：卡片发出去之后要等人点，一等可能就跨了进程重启；而且交给研发的必须
+   * 是用户眼前确认过的那一版，不能确认完再问一次模型重新生成。
+   */
+  plan: z.string().default(""),
   /** 流程走到哪了。图在 src/workflow/index.ts，谁认领这个阶段引擎那儿查。 */
   stage: WorkflowStageEnum,
   /**
@@ -61,28 +58,35 @@ export const TaskSchema = z.object({
    */
   phase: z.enum(["pending", "running", "waiting"]).default("pending"),
   /**
-   * 上一棒交下来的东西。
+   * 每一棒开工时手里那张交接单，按阶段存着。
    *
-   * 必须落盘：流程中间要等人说话，一等可能就跨了进程重启，交接单只活在内存里
-   * 的话，醒过来这一棒就不知道自己该拿什么开工。形状由目标阶段声明的 schema
-   * 管，Runner 在进阶段前会验一遍，所以这里存成 unknown。
+   * 必须落盘：流程中间要等人说话，一等可能就跨了进程重启，单子只活在内存里的
+   * 话，醒过来这一棒就不知道自己该拿什么开工。形状由目标阶段声明的 schema 管，
+   * Runner 在进阶段前会验一遍，所以 output 存成 unknown。
+   *
+   * 按阶段存而不是只留最新那张：走到后面还想知道当初是拿什么开的工——立项时的
+   * 需求、拆出来的方案、每一轮改了什么。只留一张的话，交下一棒就把上一张冲掉了。
+   *
+   * from 是上一棒的阶段名，入口那张是 null。同一个阶段可能从两个方向进来（比如
+   * spec 既可能是澄清完过来的，也可能是验收打回来的），靠它认。
    */
-  handoff: z
-    .object({ from: WorkflowStageEnum.nullable(), output: z.unknown() })
-    .nullable()
-    .default(null),
+  stageRecord: z
+    .partialRecord(
+      WorkflowStageEnum,
+      z.object({ from: WorkflowStageEnum.nullable(), output: z.unknown() }),
+    )
+    .default({}),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
-export type Task = z.infer<typeof TaskSchema>;
+export type Session = z.infer<typeof SessionSchema>;
 
-export class TaskStore {
+export class SessionStore {
   private get dir(): string {
-    return resolve(config.sessionsDir, "tasks");
+    return resolve(config.sessionsDir);
   }
 
   private fileOf(threadId: string): string {
-    // thread_id 形如 omt_xxx，本身就安全；仍做一次白名单过滤防目录穿越
     const safe = threadId.replace(/[^a-zA-Z0-9_-]/g, "_");
     return resolve(this.dir, `${safe}.json`);
   }
@@ -100,21 +104,19 @@ export class TaskStore {
     return `T${stamp}-${suffix}`;
   }
 
-  async load(threadId: string): Promise<Task | null> {
+  async load(threadId: string): Promise<Session | null> {
     try {
       const raw = await readFile(this.fileOf(threadId), "utf8");
-      const parsed = TaskSchema.safeParse(JSON.parse(raw));
+      const parsed = SessionSchema.safeParse(JSON.parse(raw));
       return parsed.success ? parsed.data : null;
     } catch {
-      // 文件不存在 = 这个话题不是我发起的任务
       return null;
     }
   }
 
-  /** 落盘，并把盘上那一份还回去——引擎每一棒都接着用它往下推 */
-  async save(task: Task): Promise<Task> {
+  async save(task: Session): Promise<Session> {
     await mkdir(this.dir, { recursive: true });
-    const next: Task = { ...task, updatedAt: new Date().toISOString() };
+    const next: Session = { ...task, updatedAt: new Date().toISOString() };
     await writeFile(
       this.fileOf(task.threadId),
       JSON.stringify(next, null, 2),
@@ -123,22 +125,15 @@ export class TaskStore {
     return next;
   }
 
-  /**
-   * 盘上所有任务。启动时用它挑出中断在半路的。
-   *
-   * 读不动或者形状对不上的文件直接跳过——一个坏文件不该让整个进程起不来，何况
-   * 多半是老版本写的，重跑那一棒也救不回来。
-   */
-  async list(): Promise<Task[]> {
+  async list(): Promise<Session[]> {
     let files: string[];
     try {
       files = await readdir(this.dir);
     } catch {
-      // 目录还没建 = 一个任务都还没有
       return [];
     }
 
-    const tasks: Task[] = [];
+    const tasks: Session[] = [];
     for (const file of files) {
       if (!file.endsWith(".json")) continue;
       const task = await this.load(file.slice(0, -".json".length));
@@ -148,4 +143,4 @@ export class TaskStore {
   }
 }
 
-export const taskStore = new TaskStore();
+export const sessionStore = new SessionStore();

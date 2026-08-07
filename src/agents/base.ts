@@ -1,6 +1,6 @@
 import { feishu } from "../config.js";
 import type { Runner } from "../workflow/runner.js";
-import type { Task } from "../store/index.js";
+import type { Session } from "../store/index.js";
 import type {
   Agent,
   AgentJob,
@@ -30,7 +30,7 @@ export abstract class BaseAgent implements Agent {
     return this.bot.openId;
   }
 
-  async say(task: Task, text: string): Promise<void> {
+  async say(task: Session, text: string): Promise<void> {
     await this.bot.replyText(task.rootMessageId, text, { inThread: true });
   }
 
@@ -39,6 +39,7 @@ export abstract class BaseAgent implements Agent {
     await this.bot.start({
       onThread: (threadId, msg) => runner.deliver(this.job, threadId, msg),
       onGroup: (msg) => this.onGroup(msg),
+      onCardAction: (action) => runner.click(this.job, action),
     });
     await this.bot.resolveOpenId();
   }

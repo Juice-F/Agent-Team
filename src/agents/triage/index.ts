@@ -1,6 +1,6 @@
 import { modelFor, type OnProgress } from "../../model/index.js";
 import type { Inbound, StepContext, StepResult } from "../../types.js";
-import { taskStore, type Task, type Turn } from "../../store/index.js";
+import { sessionStore, type Session, type Turn } from "../../store/index.js";
 import { BaseAgent } from "../base.js";
 import * as cards from "./cards.js";
 import { SYSTEM } from "./prompt.js";
@@ -15,14 +15,15 @@ export class TriageAgent extends BaseAgent {
     if (ctx.stage !== "clarifying") return { kind: "wait" };
     if (!ctx.message) return { kind: "wait" };
 
+    const history = ctx.task.turns[ctx.stage] ?? [];
     const result = await this.decide(
-      ctx.task.turns,
+      history,
       ctx.message.text,
       undefined,
       ctx.signal,
     );
     const turns: Turn[] = [
-      ...ctx.task.turns,
+      ...history,
       { role: "user", text: ctx.message.text },
       { role: "assistant", text: result.reply },
     ];
@@ -76,25 +77,30 @@ export class TriageAgent extends BaseAgent {
     const request = result.request || msg.text;
     // 起点：说清楚了就直接进产品那一环，没说清就先留在澄清
     const stage = result.verdict === "task" ? "spec" : "clarifying";
-    const task: Task = {
-      id: taskStore.makeId(new Date(), msg.messageId),
+    const task: Session = {
+      id: sessionStore.makeId(new Date(), msg.messageId),
       threadId: opened.threadId,
       chatId: msg.chatId,
       rootMessageId: msg.messageId,
       title,
       request,
-      turns: [
-        { role: "user", text: msg.text },
-        { role: "assistant", text: result.reply },
-      ],
+      // 这一段是澄清阶段的对话，哪怕直接立项跳过了 clarifying 也记在它名下
+      turns: {
+        clarifying: [
+          { role: "user", text: msg.text },
+          { role: "assistant", text: result.reply },
+        ],
+      },
+      // 方案是产品那一棒的产物，立项时还没有
+      plan: "",
       stage,
       phase: "pending",
-      // 起跑时手里那张交接单。from 是 null——这一棒不是谁交下来的。
-      handoff: { from: null, output: { title, request } },
+      // 起跑时手里那张交接单，记在起跑那一棒名下。from 是 null——不是谁交下来的。
+      stageRecord: { [stage]: { from: null, output: { title, request } } },
       createdAt: now,
       updatedAt: now,
     };
-    await taskStore.save(task);
+    await sessionStore.save(task);
 
     if (stage === "clarifying") {
       await this.bot.patchCard(card, cards.threadOpened());

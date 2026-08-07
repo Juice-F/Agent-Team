@@ -1,5 +1,5 @@
 import { generateCard, type Card } from "../../feishu/card.js";
-import type { Task } from "../../store/index.js";
+import type { Session } from "../../store/index.js";
 
 export function thinking(detail?: string): Card {
   return generateCard({ tone: "progress", title: "思考中", detail });
@@ -33,7 +33,7 @@ export function threadUnsupported(): Card {
   });
 }
 
-export function filed(task: Task): Card {
+export function filed(task: Session): Card {
   return generateCard({
     tone: "done",
     title: "已立项",
@@ -42,7 +42,7 @@ export function filed(task: Task): Card {
   });
 }
 
-export function handOff(task: Task): Card {
+export function handOff(task: Session): Card {
   return generateCard({
     tone: "task",
     title: task.title,

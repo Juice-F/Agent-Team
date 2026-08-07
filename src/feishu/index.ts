@@ -2,7 +2,7 @@ import * as lark from "@larksuiteoapi/node-sdk";
 import { jobLabelMap } from "../config.js";
 import type { AgentJob, Inbound } from "../types.js";
 import { enqueue, isDuplicate } from "../utils/queue.js";
-import type { Card } from "./card.js";
+import { hasButtons, settleCard, type Card } from "./card.js";
 import type { OnProgress } from "../model/index.js";
 
 type ReceiveEvent = Parameters<
@@ -25,6 +25,21 @@ export interface ChannelHandler {
   onGroup?(msg: Inbound): Promise<void>;
   /** 话题内的消息。已按话题串行，同一话题不会并发进来。 */
   onThread?(threadId: string, msg: Inbound): Promise<void>;
+  /**
+   * 用户点了卡片上的按钮。返回的话会以 toast 的形式弹给点的那个人。
+   *
+   * 必须立刻返回：飞书等这个回调的响应，超时就在用户那边显示成失败。真正要干的
+   * 活得挂到后台去，别在这儿 await。
+   */
+  onCardAction?(action: CardAction): Promise<string>;
+}
+
+/** 用户点按钮这件事。value 是我们自己挂在按钮上的，飞书原样送回。 */
+export interface CardAction {
+  value: Record<string, unknown>;
+  /** 承载这个按钮的那张卡片 */
+  messageId: string;
+  chatId: string;
 }
 
 /** 卡片更新的最小间隔。飞书对消息更新有频控，逐字流式在 IM 里是行不通的。 */
@@ -39,6 +54,7 @@ export class FeishuChannel {
   private readonly client: lark.Client;
   private readonly ws: lark.WSClient;
   private handler: ChannelHandler = {};
+  private readonly clickable = new Map<string, Card>();
   openId: string | null = null;
 
   constructor(
@@ -78,12 +94,15 @@ export class FeishuChannel {
 
   async start(handler: ChannelHandler = {}): Promise<void> {
     this.handler = handler;
-    const dispatcher = new lark.EventDispatcher({}).register({
+    const dispatcher = new lark.EventDispatcher({}).register<{
+      "card.action.trigger": (data: lark.RawCardActionEvent) => Promise<unknown>;
+    }>({
       "im.message.receive_v1": (data) => {
         void this.receive(data).catch((err: unknown) => {
           console.error(`[${this.role}]`, err);
         });
       },
+      "card.action.trigger": (data) => this.clicked(data),
     });
     await this.ws.start({ eventDispatcher: dispatcher });
   }
@@ -96,12 +115,14 @@ export class FeishuChannel {
     return this.post(messageId, "text", { text }, opts);
   }
 
-  replyCard(
+  async replyCard(
     messageId: string,
     card: Card,
     opts: { inThread?: boolean } = {},
   ): Promise<Posted> {
-    return this.post(messageId, "interactive", card, opts);
+    const posted = await this.post(messageId, "interactive", card, opts);
+    this.remember(posted.messageId, card);
+    return posted;
   }
 
   private async post(
@@ -139,10 +160,31 @@ export class FeishuChannel {
         console.error(
           `[${this.role}] 更新卡片失败（code=${String(res.code)}）：${res.msg ?? "无描述"}`,
         );
+        return;
       }
+      this.remember(messageId, card);
     } catch (err) {
       console.error(`[${this.role}] 更新卡片失败`, err);
     }
+  }
+
+  /** 卡片上有按钮就留一份，没有就把之前留的清掉——按钮被自己盖掉了 */
+  private remember(messageId: string, card: Card): void {
+    if (hasButtons(card)) this.clickable.set(messageId, card);
+    else this.clickable.delete(messageId);
+  }
+
+  /**
+   * 抹掉这张卡片上的按钮。
+   *
+   * 先摘出来再改：两下连点会同时进到这儿，第一下摘走之后第二下就什么都拿不到，
+   * 不会重复 patch。
+   */
+  private async settle(messageId: string, chosen: string): Promise<void> {
+    const card = this.clickable.get(messageId);
+    if (!card) return;
+    this.clickable.delete(messageId);
+    await this.patchCard(messageId, settleCard(card, chosen));
   }
 
   trackProgress(
@@ -175,6 +217,34 @@ export class FeishuChannel {
     };
   }
 
+  private async clicked(data: lark.RawCardActionEvent): Promise<unknown> {
+    const value = data.action?.value;
+    const messageId = data.context?.open_message_id ?? data.open_message_id;
+    const chatId = data.context?.open_chat_id ?? data.open_chat_id;
+    if (!value || typeof value !== "object" || !messageId || !chatId) return;
+
+    const onCardAction = this.handler.onCardAction;
+    if (!onCardAction) return;
+
+    let toast: string;
+    try {
+      toast = await onCardAction({
+        value: value as Record<string, unknown>,
+        messageId,
+        chatId,
+      });
+    } catch (err) {
+      console.error(`[${this.role}] 按钮回调`, err);
+      toast = "没处理成功，看下日志";
+    }
+
+    // 不 await：飞书等着这个响应，抹按钮是另一次请求，让它自己在后面跑
+    const chosen = (value as { text?: unknown }).text;
+    void this.settle(messageId, typeof chosen === "string" ? chosen : "已处理");
+
+    return { toast: { type: "info", content: toast } };
+  }
+
   private extractText(message: Message): string {
     try {
       const parsed = JSON.parse(message.content) as { text?: string };
@@ -187,7 +257,6 @@ export class FeishuChannel {
       return "";
     }
   }
-
 
   private mentionsMe(message: Message): boolean {
     return (message.mentions ?? []).some((m) => m.id?.open_id === this.openId);

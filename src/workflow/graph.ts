@@ -1,6 +1,6 @@
 import type { Agent, AgentJob, WorkflowStage } from "../types.js";
 import { WorkflowStageSchema } from "../schema.js";
-import type { TaskStore } from "../store/index.js";
+import type { SessionStore } from "../store/index.js";
 import { Runner } from "./runner.js";
 
 export interface Node {
@@ -92,7 +92,7 @@ export class Workflow {
     return to;
   }
 
-  async run(store: TaskStore): Promise<Runner> {
+  async run(store: SessionStore): Promise<Runner> {
     const runner = new Runner(this, store);
     await runner.start();
     return runner;

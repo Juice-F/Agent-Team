@@ -1,7 +1,8 @@
 import type { Agent, AgentJob, Inbound, StepContext, StepResult } from "../types.js";
-import { WorkflowStageSchema } from "../schema.js";
+import type { CardAction } from "../feishu/index.js";
+import { CardChoiceSchema, WorkflowStageSchema } from "../schema.js";
 import { enqueue } from "../utils/queue.js";
-import type { Task, TaskStore } from "../store/index.js";
+import type { Session, SessionStore } from "../store/index.js";
 import type { Workflow } from "./graph.js";
 
 /** 被 interrupt() 打断，不是自己跑挂的 */
@@ -9,13 +10,14 @@ export class Interrupted extends Error {}
 
 export class Runner {
   private readonly inflight = new Map<string, AbortController>();
+  private readonly clicking = new Set<string>();
 
   constructor(
     private readonly graph: Workflow,
-    private readonly store: TaskStore,
+    private readonly store: SessionStore,
   ) {}
 
-  async start(): Promise<Task[]> {
+  async start(): Promise<Session[]> {
     await Promise.all(this.graph.agents.map((agent) => agent.start(this)));
     return this.recover();
   }
@@ -30,7 +32,62 @@ export class Runner {
   }
 
 
-  async resume(task: Task, from: Agent): Promise<void> {
+  /**
+   * 话题里点了卡片上的按钮。
+   *
+   * 点一下等同于在话题里说了按钮上那句话，所以翻成一条消息走跟打字一模一样的
+   * 路。返回的话会弹给点按钮的人看。
+   *
+   */
+  async click(job: AgentJob, action: CardAction): Promise<string> {
+    const parsed = CardChoiceSchema.safeParse(action.value);
+    if (!parsed.success) return "这个按钮的参数不对，可能是旧版本发的卡片";
+    const choice = parsed.data;
+
+    // 占位得在第一个 await 之前，而且要同步占。连点两下是两次并发回调，等 load
+    // 回来再判的话，两边看到的都是「没人在跑」，一样会跑出两遍。
+    if (this.clicking.has(choice.threadId)) return "上一次还在处理，等一下";
+    this.clicking.add(choice.threadId);
+
+    let queued = false;
+    try {
+      const task = await this.store.load(choice.threadId);
+      if (!task) return "找不到这个任务";
+      if (this.graph.ownerOf(task.stage) !== job) return "这一步已经不归我管了";
+      if (task.stage !== choice.stage) {
+        return `任务已经走到「${this.graph.at(task.stage).label}」，这张卡片过期了`;
+      }
+
+      const message: Inbound = {
+        text: choice.text,
+        messageId: action.messageId,
+        chatId: action.chatId,
+        fromBot: false,
+        confirmed: choice.confirm,
+      };
+      const done = enqueue(choice.threadId, async () => {
+        // 排到队头时盘上那份才作数——排队期间话题里可能已经聊过好几轮了
+        const fresh = await this.store.load(choice.threadId);
+        if (!fresh || fresh.stage !== choice.stage) return;
+        await this.step(fresh, message);
+      });
+      queued = true;
+
+      void done
+        .catch((err: unknown) => {
+          console.error(`[click] ${task.id} ${task.stage}`, err);
+        })
+        // 那一棒真跑完了才放开，不是排上队就放开
+        .finally(() => this.clicking.delete(choice.threadId));
+
+      return "收到";
+    } finally {
+      // 没排上队就当场放开，否则这个话题的按钮以后再也点不动了
+      if (!queued) this.clicking.delete(choice.threadId);
+    }
+  }
+
+  async resume(task: Session, from: Agent): Promise<void> {
     await this.notify(task, from);
   }
 
@@ -49,7 +106,7 @@ export class Runner {
     return threads.length;
   }
 
-  private async recover(): Promise<Task[]> {
+  private async recover(): Promise<Session[]> {
     const stuck = (await this.store.list()).filter(
       (task) => task.phase !== "waiting" && this.graph.ownerOf(task.stage),
     );
@@ -65,7 +122,7 @@ export class Runner {
   }
 
   /** 跑一棒。跑完要么停在原地等人说话，要么落盘 + @ 下一棒，然后就返回。 */
-  private async step(task: Task, message: Inbound | null): Promise<Task> {
+  private async step(task: Session, message: Inbound | null): Promise<Session> {
     const node = this.graph.at(task.stage);
     // 终点：没人认领，也就没人再推了
     if (!node.agent) {
@@ -74,14 +131,14 @@ export class Runner {
         : this.store.save({ ...task, phase: "waiting" });
     }
 
-    const input = this.handoffInto(task);
+    const input = this.inputFor(task);
     const control = new AbortController();
     this.inflight.set(task.threadId, control);
     let current = await this.store.save({ ...task, phase: "running" });
 
     let result: StepResult;
     try {
-      // stage 和 input 的对应关系 handoffInto 刚验过，但那是运行期的事，类型上
+      // stage 和 input 的对应关系 inputFor 刚验过，但那是运行期的事，类型上
       // 接不上——只此一处硬转
       result = await node.agent.run({
         stage: node.stage,
@@ -99,7 +156,17 @@ export class Runner {
       this.inflight.delete(task.threadId);
     }
 
-    if (result.patch) current = { ...current, ...result.patch };
+    if (result.patch) {
+      const { title, request, plan, turns } = result.patch;
+      current = {
+        ...current,
+        ...(title !== undefined && { title }),
+        ...(request !== undefined && { request }),
+        ...(plan !== undefined && { plan }),
+        // 一棒交上来的是自己那一段，按它当前所在的阶段归位——写不到别人头上
+        ...(turns && { turns: { ...current.turns, [current.stage]: turns } }),
+      };
+    }
 
     // 这一棒说等人说话，就停在这儿
     if (result.kind === "wait") {
@@ -113,7 +180,11 @@ export class Runner {
       stage: to,
       // 打回去的那一棒也是从头开始，所以一律 pending
       phase: "pending",
-      handoff: { from: current.stage, output: result.output },
+      // 记在目标阶段名下——它是「进 to 这一棒时手里的单子」，不是「离开 from 时的」
+      stageRecord: {
+        ...current.stageRecord,
+        [to]: { from: current.stage, output: result.output },
+      },
     });
 
     // 先落盘再 @：@ 发失败了任务停在 pending，下次启动 recover 还能捡回来；
@@ -122,7 +193,7 @@ export class Runner {
     return next;
   }
 
-  private async notify(task: Task, from: Agent): Promise<void> {
+  private async notify(task: Session, from: Agent): Promise<void> {
     const node = this.graph.at(task.stage);
     const to = node.agent;
     if (!to) return;
@@ -137,18 +208,17 @@ export class Runner {
   }
 
   /**
-   * 取上一棒交下来的东西，按这一棒声明的形状验一遍。
+   * 取这一棒开工要用的那张单子，按它声明的形状验一遍。
    *
-   * 交接单是落过盘的，可能是上个版本的代码写的；上一棒也可能干脆没给。两种都
-   * 得在开工前拦下来——让它揣着半张单子跑起来，错会飘到很后面才显形。
+   * 单子是落过盘的，可能是上个版本的代码写的；上一棒也可能干脆没给。两种都得在
+   * 开工前拦下来——让它揣着半张单子跑起来，错会飘到很后面才显形。
    */
-  private handoffInto(task: Task): unknown {
-    const parsed = WorkflowStageSchema[task.stage].safeParse(
-      task.handoff?.output,
-    );
+  private inputFor(task: Session): unknown {
+    const record = task.stageRecord[task.stage];
+    const parsed = WorkflowStageSchema[task.stage].safeParse(record?.output);
     if (parsed.success) return parsed.data;
     throw new Error(
-      `任务 ${task.id} 进 ${task.stage} 时交接单对不上（来自 ${task.handoff?.from ?? "入口"}）：\n` +
+      `任务 ${task.id} 进 ${task.stage} 时交接单对不上（来自 ${record?.from ?? "入口"}）：\n` +
         parsed.error.issues
           .map((i) => `  - ${i.path.join(".") || "(root)"}: ${i.message}`)
           .join("\n"),
