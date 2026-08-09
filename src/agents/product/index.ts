@@ -45,7 +45,7 @@ export class ProductAgent extends BaseAgent {
   private async spec(ctx: SpecContext): Promise<StepResult> {
     // 只读自己这一段。澄清阶段那几轮不看——问清楚之后的复述就在 request 里，
     // 再把话题助手的往返读一遍只是噪音。
-    const history = ctx.task.turns[ctx.stage] ?? [];
+    const prevTurns = ctx.task.turns[ctx.stage] ?? [];
 
     // 点了「就按这个做」：他认可的是卡片上那一版，直接拿盘上存的那份交棒。
     // 再问一次模型的话，拿回来的可能已经不是他看过的方案了。
@@ -58,14 +58,14 @@ export class ProductAgent extends BaseAgent {
         to: "coding",
         output: { plan: ctx.task.plan, note: "" },
         patch: {
-          turns: [...history, { role: "user", text: ctx.message.text }],
+          turns: [...prevTurns, { role: "user", text: ctx.message.text }],
         },
       };
     }
 
-    const { card, result } = await this.think(ctx, history);
+    const { card, result } = await this.think(ctx, prevTurns);
     const turns: Turn[] = [
-      ...history,
+      ...prevTurns,
       // 被上一棒推起来的那次没有用户消息，这一轮就只有自己说的话
       ...(ctx.message
         ? [{ role: "user", text: ctx.message.text } satisfies Turn]
@@ -86,7 +86,7 @@ export class ProductAgent extends BaseAgent {
 
   private async think(
     ctx: SpecContext,
-    history: Turn[],
+    turns: Turn[],
   ): Promise<{ card: string; result: ProductOutput }> {
     const posted = await this.bot.replyCard(
       ctx.task.rootMessageId,
@@ -97,7 +97,7 @@ export class ProductAgent extends BaseAgent {
     try {
       return {
         card: posted.messageId,
-        result: await this.decide(ctx, history, progress.on),
+        result: await this.decide(ctx, turns, progress.on),
       };
     } catch (err) {
       await this.bot.patchCard(posted.messageId, cards.failed());
@@ -109,10 +109,10 @@ export class ProductAgent extends BaseAgent {
 
   private decide(
     ctx: SpecContext,
-    history: Turn[],
+    turns: Turn[],
     onProgress: OnProgress,
   ): Promise<ProductOutput> {
-    const historyStr = history
+    const transcript = turns
       .map((t) => `${t.role === "user" ? "用户" : "你"}：${t.text}`)
       .join("\n");
 
@@ -120,7 +120,7 @@ export class ProductAgent extends BaseAgent {
       `需求标题：${ctx.input.title || ctx.task.title}`,
       `需求描述：\n${ctx.input.request}`,
     ];
-    if (historyStr) parts.push(`到目前为止的对话：\n${historyStr}`);
+    if (transcript) parts.push(`到目前为止的对话：\n${transcript}`);
     parts.push(
       ctx.message
         ? `用户刚刚说：\n${ctx.message.text}`

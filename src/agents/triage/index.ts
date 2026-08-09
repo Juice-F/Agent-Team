@@ -15,15 +15,15 @@ export class TriageAgent extends BaseAgent {
     if (ctx.stage !== "clarifying") return { kind: "wait" };
     if (!ctx.message) return { kind: "wait" };
 
-    const history = ctx.task.turns[ctx.stage] ?? [];
+    const prevTurns = ctx.task.turns[ctx.stage] ?? [];
     const result = await this.decide(
-      history,
+      prevTurns,
       ctx.message.text,
       undefined,
       ctx.signal,
     );
     const turns: Turn[] = [
-      ...history,
+      ...prevTurns,
       { role: "user", text: ctx.message.text },
       { role: "assistant", text: result.reply },
     ];
@@ -118,17 +118,17 @@ export class TriageAgent extends BaseAgent {
   }
 
   private async decide(
-    history: Turn[],
+    turns: Turn[],
     request: string,
     onProgress?: OnProgress,
     signal?: AbortSignal,
   ): Promise<TriageOutput> {
-    const historyStr = history
+    const transcript = turns
       .map((t) => `${t.role === "user" ? "用户" : "你"}：${t.text}`)
       .join("\n");
 
-    const user = historyStr
-      ? `你和用户在话题里已经聊过：\n\n${historyStr}\n\n用户刚刚又说：\n\n${request}`
+    const user = transcript
+      ? `你和用户在话题里已经聊过：\n\n${transcript}\n\n用户刚刚又说：\n\n${request}`
       : `用户在群里发来一条消息：\n\n${request}`;
 
     return modelFor("triage").generate({
