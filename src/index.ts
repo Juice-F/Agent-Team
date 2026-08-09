@@ -20,7 +20,6 @@ async function main(): Promise<void> {
 
   // 拉起所有角色的服务，顺便把上次中断在半路的任务捡回来接着跑
   runner = await workflow.run(sessionStore);
-  console.log("\n群里直接说需求，话题助手会判断该不该立项。Ctrl+C 退出。\n");
 }
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {

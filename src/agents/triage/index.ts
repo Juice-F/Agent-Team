@@ -1,4 +1,5 @@
 import { modelFor, type OnProgress } from "../../model/index.js";
+import { router } from "../../router/index.js";
 import type { Inbound, StepContext, StepResult } from "../../types.js";
 import { sessionStore, type Session, type Turn } from "../../store/index.js";
 import { BaseAgent } from "../base.js";
@@ -56,6 +57,8 @@ export class TriageAgent extends BaseAgent {
   }
 
   protected override async onGroup(msg: Inbound): Promise<void> {
+    if (await this.replySimpleQuery(msg)) return;
+
     const { card, result } = await this.think(msg);
 
     if (result.verdict === "chat") {
@@ -115,6 +118,33 @@ export class TriageAgent extends BaseAgent {
     });
     // 直接开话题并立项，艾特产品经理接收任务
     await this.runner.resume(task, this);
+  }
+
+  private async replySimpleQuery(msg: Inbound): Promise<boolean> {
+    const decision = await router.route(msg.text);
+    console.log(
+      `[router] ${decision.label} ${decision.confidence.toFixed(2)} by ${decision.by}` +
+        (decision.rule ? `（${decision.rule}）` : ""),
+    );
+    if (decision.label !== "SIMPLE") return false;
+
+    let answer;
+    try {
+      answer = await router.answer(msg.text);
+    } catch (err) {
+      console.error("[router] 简单消息没答出来，退回立项需求澄清", err);
+      return false;
+    }
+
+    if (answer.kind === "escalate") {
+      console.log(
+        `[router] 小模型回复评测 ${String(answer.score)} 分，退回立项需求澄清：${answer.reason}`,
+      );
+      return false;
+    }
+
+    await this.bot.replyText(msg.messageId, answer.reply);
+    return true;
   }
 
   private async decide(
