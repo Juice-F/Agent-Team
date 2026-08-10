@@ -16,7 +16,7 @@ export const RouteVerdictSchema = z.object({
 export type RouteVerdict = z.infer<typeof RouteVerdictSchema>;
 
 export const ReplySchema = z.object({
-  reply: z.string().describe("回给用户的话，一到两句"),
+  reply: z.string().trim().min(1).describe("回给用户的话，一到两句"),
 });
 
 export const JudgeSchema = z.object({
@@ -29,4 +29,3 @@ export const JudgeSchema = z.object({
     ),
   reason: z.string().describe("一句话说明为什么该发出去、或者为什么该退回去"),
 });
-export type Judgement = z.infer<typeof JudgeSchema>;

@@ -128,17 +128,11 @@ export class TriageAgent extends BaseAgent {
     );
     if (decision.label !== "SIMPLE") return false;
 
-    let answer;
-    try {
-      answer = await router.answer(msg.text);
-    } catch (err) {
-      console.error("[router] 简单消息没答出来，退回立项需求澄清", err);
-      return false;
-    }
-
+    const answer = await router.answer(msg.text);
     if (answer.kind === "escalate") {
+      const score = answer.score === null ? "-" : String(answer.score);
       console.log(
-        `[router] 小模型回复评测 ${String(answer.score)} 分，退回立项需求澄清：${answer.reason}`,
+        `[router] ${answer.why} ${score} 分，退回立项需求澄清：${answer.reason}`,
       );
       return false;
     }

@@ -31,7 +31,10 @@ export type SimpleAnswer =
     }
   | {
       readonly kind: "escalate";
-      readonly score: number;
+      /** low-score 是评测判的 */
+      readonly why: "low-score" | "answer-failed" | "judge-failed";
+      /** 只有 low-score 有分，跑挂了没分 */
+      readonly score: number | null;
       readonly reason: string;
     };
 
@@ -40,8 +43,6 @@ export type SimpleAnswer =
  *
  * 规则 → 分类器 → 小模型答 → 大模型评 →（分不够）退回去开话题做立项需求澄清。
  *
- * 两个方向的错代价不一样，所以整条路都往 COMPLEX 那边偏：分类器超时、报错、
- * 置信度不够、答完评测不过，一律当复杂的推回原来那条链。
  */
 export class ModelRouter {
   constructor(private readonly cfg: RouterConfig = routerConfig) {}
@@ -78,14 +79,23 @@ export class ModelRouter {
     text: string,
     opts: { onProgress?: OnProgress; signal?: AbortSignal } = {},
   ): Promise<SimpleAnswer> {
-    const small = modelOf(routerModels.small);
-    const draft = await small.generate({
-      system: RESPONDER,
-      user: `用户在群里说：\n\n${text}`,
-      schema: ReplySchema,
-      onProgress: opts.onProgress,
-      signal: opts.signal,
-    });
+    let draft;
+    try {
+      draft = await modelOf(routerModels.small).generate({
+        system: RESPONDER,
+        user: `用户在群里说：\n\n${text}`,
+        schema: ReplySchema,
+        onProgress: opts.onProgress,
+        signal: this.deadline(this.cfg.answerTimeoutMs, opts.signal),
+      });
+    } catch (err) {
+      return {
+        kind: "escalate",
+        why: "answer-failed",
+        score: null,
+        reason: err instanceof Error ? err.message : String(err),
+      };
+    }
 
     if (!this.cfg.enableCascade) {
       return { kind: "reply", reply: draft.reply, score: null };
@@ -97,16 +107,24 @@ export class ModelRouter {
         system: JUDGE,
         user: `用户说：\n\n${text}\n\n机器人的回复：\n\n${draft.reply}`,
         schema: JudgeSchema,
-        signal: opts.signal,
+        signal: this.deadline(this.cfg.judgeTimeoutMs, opts.signal),
       });
     } catch (err) {
-      console.error("[router] 回复评测没跑出来，直接发小模型那版", err);
-      return { kind: "reply", reply: draft.reply, score: null };
+      return {
+        kind: "escalate",
+        why: "judge-failed",
+        score: null,
+        reason: err instanceof Error ? err.message : String(err),
+      };
     }
 
-    // 不及格说明这条根本不是简单消息，路由这一层判错了，交回原链路重判一遍
     if (judged.score < this.cfg.cascadeScoreThreshold) {
-      return { kind: "escalate", score: judged.score, reason: judged.reason };
+      return {
+        kind: "escalate",
+        why: "low-score",
+        score: judged.score,
+        reason: judged.reason,
+      };
     }
     return { kind: "reply", reply: draft.reply, score: judged.score };
   }
