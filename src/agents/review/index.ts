@@ -1,5 +1,5 @@
-import { config } from "../../config.js";
 import { modelFor, type OnProgress } from "../../model/index.js";
+import { workspace } from "../../workspace/index.js";
 import type { Inbound, StepContext, StepResult } from "../../types.js";
 import { BaseAgent } from "../base.js";
 import * as cards from "./cards.js";
@@ -83,10 +83,12 @@ export class ReviewAgent extends BaseAgent {
     return { kind: "wait", patch: { reviewNote: this.noteOf(result) } };
   }
 
-  private judge(
+  private async judge(
     ctx: ReviewContext,
     onProgress: OnProgress,
   ): Promise<ReviewOutput> {
+    const dir = await workspace.ensure(ctx.task);
+
     const parts = [
       `需求：${ctx.task.title}`,
       `产品定下来的方案：\n${ctx.task.plan}`,
@@ -103,7 +105,7 @@ export class ReviewAgent extends BaseAgent {
       user: parts.join("\n\n"),
       schema: ReviewOutputSchema,
       // 要看代码，但不许动——判改动的人不该能改它判的东西
-      repo: { path: config.targetRepo, write: false },
+      repo: { path: dir, write: false },
       onProgress,
       signal: ctx.signal,
     });

@@ -64,6 +64,8 @@ export class Runner {
         chatId: action.chatId,
         fromBot: false,
         confirmed: choice.confirm,
+        // 用户填的盖住按钮上写死的：同一个名字，他填的那份才是他眼前看到的
+        data: { ...choice.data, ...action.formValue },
       };
       const done = enqueue(choice.threadId, async () => {
         // 排到队头时盘上那份才作数——排队期间话题里可能已经聊过好几轮了
@@ -157,7 +159,7 @@ export class Runner {
     }
 
     if (result.patch) {
-      const { title, request, plan, reviewNote, acceptNote, turns } =
+      const { title, request, plan, reviewNote, acceptNote, settled, repo, turns } =
         result.patch;
       current = {
         ...current,
@@ -166,6 +168,8 @@ export class Runner {
         ...(plan !== undefined && { plan }),
         ...(reviewNote !== undefined && { reviewNote }),
         ...(acceptNote !== undefined && { acceptNote }),
+        ...(settled !== undefined && { settled }),
+        ...(repo !== undefined && { repo }),
         // 一棒交上来的是自己那一段，按它当前所在的阶段归位——写不到别人头上
         ...(turns && { turns: { ...current.turns, [current.stage]: turns } }),
       };

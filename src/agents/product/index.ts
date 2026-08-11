@@ -1,5 +1,5 @@
-import { config } from "../../config.js";
 import { modelFor, type OnProgress } from "../../model/index.js";
+import { workspace } from "../../workspace/index.js";
 import type { Inbound, StepContext, StepResult } from "../../types.js";
 import type { Turn } from "../../session/index.js";
 import { BaseAgent } from "../base.js";
@@ -199,10 +199,12 @@ export class ProductAgent extends BaseAgent {
     return { kind: "wait", patch: { acceptNote: result.request } };
   }
 
-  private check(
+  private async check(
     ctx: AcceptingContext,
     onProgress: OnProgress,
   ): Promise<AcceptOutput> {
+    const dir = await workspace.ensure(ctx.task);
+
     const parts = [
       `需求：${ctx.task.title}`,
       `用户当初要的：\n${ctx.task.request}`,
@@ -215,7 +217,7 @@ export class ProductAgent extends BaseAgent {
       user: parts.join("\n\n"),
       schema: AcceptOutputSchema,
       // 验收得看真东西，但不许动——发现没做到是提出来，不是自己顺手补上
-      repo: { path: config.targetRepo, write: false },
+      repo: { path: dir, write: false },
       onProgress,
       signal: ctx.signal,
     });

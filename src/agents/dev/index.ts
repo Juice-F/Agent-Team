@@ -1,5 +1,5 @@
-import { config } from "../../config.js";
 import { modelFor, type OnProgress } from "../../model/index.js";
+import { workspace } from "../../workspace/index.js";
 import type { Inbound, StepContext, StepResult } from "../../types.js";
 import { BaseAgent } from "../base.js";
 import * as cards from "./cards.js";
@@ -7,7 +7,7 @@ import { SYSTEM } from "./prompt.js";
 import { DevOutputSchema, type DevOutput } from "./schema.js";
 
 /**
- * 研发。拿产品拆好的方案在 TARGET_REPO 里动手改代码，交棒给 review。
+ * 研发。拿产品拆好的方案，在这个任务自己那份工作区里动手改代码，交棒给 review。
  *
  * 和前面几棒不一样：这一棒不跟人说话，被推起来就一路跑到底，跑完直接交棒。所以
  * 它是唯一一个开着工具跑模型的角色——代码要真的落到文件里，别处那几棒都是纯生成。
@@ -54,10 +54,14 @@ export class DevAgent extends BaseAgent {
     };
   }
 
-  private write(
+  private async write(
     ctx: CodingContext,
     onProgress: OnProgress,
   ): Promise<DevOutput> {
+    // 开工前自己确认一遍工作区在不在：任务是落盘的，轮到这一棒时它可能已经换了
+    // 台机器，或者目录被清掉了
+    const dir = await workspace.ensure(ctx.task);
+
     const parts = [
       `需求：${ctx.task.title}`,
       `产品定下来的方案：\n${ctx.input.plan}`,
@@ -73,8 +77,8 @@ export class DevAgent extends BaseAgent {
       system: SYSTEM,
       user: parts.join("\n\n"),
       schema: DevOutputSchema,
-      // 唯一一处放开写权限的调用：代码得真的落进这个仓库
-      repo: { path: config.targetRepo, write: true },
+      // 唯一一处放开写权限的调用：代码得真的落进这个任务自己那份工作区
+      repo: { path: dir, write: true },
       onProgress,
       signal: ctx.signal,
     });

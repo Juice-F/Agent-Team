@@ -20,6 +20,8 @@ export interface RouteDecision {
   readonly by: "rule" | "model" | "fallback";
   /** by 为 rule 时是命中的规则名，方便看日志时知道被哪条拦下的 */
   readonly rule?: string;
+  /** 规则自带的回复，有就直接发，别再往下走小模型那条链 */
+  readonly reply?: string;
 }
 
 export type SimpleAnswer =
@@ -50,7 +52,13 @@ export class ModelRouter {
   async route(text: string, signal?: AbortSignal): Promise<RouteDecision> {
     const hit = matchRule(text);
     if (hit) {
-      return { label: hit.label, confidence: 1, by: "rule", rule: hit.name };
+      return {
+        label: hit.label,
+        confidence: 1,
+        by: "rule",
+        rule: hit.name,
+        ...(hit.reply && { reply: hit.reply }),
+      };
     }
 
     let verdict;

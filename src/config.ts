@@ -42,7 +42,7 @@ export const config = {
     },
   } satisfies Record<AgentJob, AgentSpec>,
 
-  targetRepo: required("TARGET_REPO"),
+  worksDir: ".works",
   sessionsDir: ".sessions",
   memoryDir: ".memory",
 } as const;

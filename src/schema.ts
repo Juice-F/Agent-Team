@@ -51,5 +51,12 @@ export const CardChoiceSchema = z.object({
   text: z.string(),
   /** 认可当前这一版，可以往下走了——认可的是他眼前看到的那一版，不再问模型 */
   confirm: z.boolean().default(false),
+  /**
+   * 这次点击带回来的参数。
+   *
+   * 卡片上有表单时，用户填的值按组件名并进来。对收的人来说「按钮上写死的」和
+   * 「用户刚填的」都只是这次点击的参数，没必要分家。
+   */
+  data: z.record(z.string(), z.string()).optional(),
 });
 export type CardChoice = z.infer<typeof CardChoiceSchema>;

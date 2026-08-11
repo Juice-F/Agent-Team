@@ -10,6 +10,7 @@ import type { RouteLabel } from "./schema.js";
 export interface Rule {
   readonly name: string;
   readonly label: RouteLabel;
+  readonly reply?: string;
   test(text: string): boolean;
 }
 
@@ -30,10 +31,19 @@ const GREETING =
 
 /** 整条就是一句客套或者应答 */
 const COURTESY =
-  /^(谢谢|谢啦|多谢|感谢|辛苦|辛苦了|麻烦了|好的|好嘞|好呀|收到|明白|懂了|知道了|了解|ok|okay|okk|嗯+|哦+|行|可以|没问题|不用了|算了)[\s!！。.~～]*$/i;
+  /^(谢谢|谢啦|多谢|感谢|辛苦|辛苦了|麻烦了|好的|好嘞|好呀|好|收到|明白|懂了|知道了|了解|ok|okay|okk|嗯+|哦+|行|可以|没问题|不用了|算了)[\s!！。.~～]*$/i;
 
 /** 一个表情、一个标点，没有任何实词 */
 const NO_WORDS = /^[^\p{L}\p{N}]+$/u;
+
+/** 一个没意义的碎片：纯数字，或者同一个字符重复（含单个字符） */
+const NONSENSE = /^(\d+|(.)\2*)$/u;
+
+/** 整条都是碎片：「111 222 aaa bbb」「asdf asdf」「1」这类误发、试机器人的消息 */
+function nonsense(text: string): boolean {
+  const tokens = text.split(/[\s,，.。;；、/|_-]+/u).filter(Boolean);
+  return tokens.length > 0 && tokens.every((token) => NONSENSE.test(token));
+}
 
 /** 问团队本身：你是谁、能干嘛、怎么用、现在做到哪了 */
 const ABOUT_TEAM =
@@ -69,6 +79,12 @@ export const RULES: readonly Rule[] = [
     name: "no-words",
     label: "SIMPLE",
     test: (text) => NO_WORDS.test(text),
+  },
+  {
+    name: "nonsense",
+    label: "SIMPLE",
+    reply: "没看懂这条，你是想说什么？",
+    test: nonsense,
   },
   {
     name: "about-team",

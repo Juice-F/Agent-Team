@@ -9,8 +9,6 @@ let runner: Runner | null = null;
 
 async function main(): Promise<void> {
   console.log("Agent Team");
-  console.log(`  目标仓库  ${config.targetRepo}`);
-  console.log(`  会话目录  ${config.sessionsDir}`);
   for (const [job, label] of Object.entries(jobLabelMap)) {
     const { spec } = modelFor(job as AgentJob);
     console.log(

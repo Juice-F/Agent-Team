@@ -10,6 +10,21 @@ export const TurnSchema = z.object({
 });
 export type Turn = z.infer<typeof TurnSchema>;
 
+/**
+ * 这个任务在哪个仓库上干活。用户在卡片上填的。
+ *
+ * 存的是「怎么把代码拉出来」，不是「代码在哪」：目录能从 source 算出来（见
+ * workspace.dirOf），而目录本身随时可能不在——换台机器、或者被清掉了。照着
+ * source 重新 clone 一份就是了。
+ *
+ * 没有分支：让人填一条分支只是多一格要敲的东西。拉下来就是仓库的默认分支。
+ */
+export const TaskRepoSchema = z.object({
+  /** 用户填的原文，原样交给 git clone。本地路径、git@、https 都行 */
+  source: z.string(),
+});
+export type TaskRepo = z.infer<typeof TaskRepoSchema>;
+
 export const SessionSchema = z.object({
   id: z.string(),
   /** 话题 ID，任务的主键 */
@@ -22,6 +37,16 @@ export const SessionSchema = z.object({
   rootMessageId: z.string(),
   /** 话题助手给的短标题。clarifying 阶段可能还是空的 */
   title: z.string(),
+  /**
+   * 需求已经问清楚了，只差用户在卡片上把仓库填下来。
+   *
+   * 单独存一个字段，是因为「问清楚了」和「能开工了」现在是两件事：判成 task 之后
+   * 任务还停在 clarifying 等卡片，重启捡回来得认得出它是在等填仓库，而不是还要
+   * 接着追问。这个和 repo 都齐了，才交给产品。
+   */
+  settled: z.boolean().default(false),
+  /** 在哪个仓库上干活。用户在卡片上填之前是 null */
+  repo: TaskRepoSchema.nullable().default(null),
   /**
    * 需求描述。一句话就说清的就是用户原文；澄清过的是话题助手综合几轮对话后的
    * 复述——下游要看的是问清楚之后的版本，不是最初那句含糊的。

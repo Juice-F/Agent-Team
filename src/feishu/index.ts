@@ -37,6 +37,10 @@ export interface ChannelHandler {
 /** 用户点按钮这件事。value 是我们自己挂在按钮上的，飞书原样送回。 */
 export interface CardAction {
   value: Record<string, unknown>;
+  /**
+   * 卡片上表单填的值，按组件的 name 取。普通按钮没有表单，这里是空的。
+   */
+  formValue: Record<string, string>;
   /** 承载这个按钮的那张卡片 */
   messageId: string;
   chatId: string;
@@ -230,6 +234,7 @@ export class FeishuChannel {
     try {
       toast = await onCardAction({
         value: value as Record<string, unknown>,
+        formValue: ((data.action as { form_value?: unknown } | undefined)?.form_value || {}) as Record<string, string>,
         messageId,
         chatId,
       });
@@ -264,7 +269,7 @@ export class FeishuChannel {
 
   private async receive(data: ReceiveEvent): Promise<void> {
     const { message, sender } = data;
-
+    
     // 按角色去重：四个应用各收各的
     if (isDuplicate(this.role, data.event_id)) return;
     

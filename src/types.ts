@@ -30,6 +30,13 @@ export interface Inbound {
    * 模型——重问一遍拿回来的可能已经不是用户看过的那一版了。
    */
   confirmed?: boolean;
+  /**
+   * 点按钮时一并带回来的东西：按钮 value 里挂的参数，加上卡片上表单填的值。
+   *
+   * 打字进来的消息没有这个。挂在消息上而不是另开一条路，是因为点按钮本来就当成
+   * 「用户在话题里说了这句话」在走，带回来的参数是那句话的一部分。
+   */
+  data?: Record<string, string>;
 }
 export type AgentJob = "triage" | "product" | "dev" | "review";
 export type WorkflowStage =
@@ -47,7 +54,16 @@ type Payloads = {
 
 /** 一棒能改的任务字段。stage 不在里面：走到哪由引擎按图推，不许自己写。 */
 export type TaskPatch = Partial<
-  Pick<Session, "title" | "request" | "plan" | "reviewNote" | "acceptNote">
+  Pick<
+    Session,
+    | "title"
+    | "request"
+    | "plan"
+    | "reviewNote"
+    | "acceptNote"
+    | "settled"
+    | "repo"
+  >
 > & {
   /**
    * 自己这一棒和用户的往返，整段覆盖。
