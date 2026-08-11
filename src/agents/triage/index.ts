@@ -1,7 +1,7 @@
 import { modelFor, type OnProgress } from "../../model/index.js";
 import { router } from "../../router/index.js";
 import type { Inbound, StepContext, StepResult } from "../../types.js";
-import { sessionStore, type Session, type Turn } from "../../store/index.js";
+import { sessionStore, type Session, type Turn } from "../../session/index.js";
 import { BaseAgent } from "../base.js";
 import * as cards from "./cards.js";
 import { SYSTEM } from "./prompt.js";

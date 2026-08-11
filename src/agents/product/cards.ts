@@ -1,5 +1,5 @@
 import { generateCard, type Card, type CardButton } from "../../feishu/card.js";
-import type { Session } from "../../store/index.js";
+import type { Session } from "../../session/index.js";
 import type { CardChoice } from "../../schema.js";
 import type { AcceptOutput, ProductOutput } from "./schema.js";
 

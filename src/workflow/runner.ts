@@ -2,7 +2,7 @@ import type { Agent, AgentJob, Inbound, StepContext, StepResult } from "../types
 import type { CardAction } from "../feishu/index.js";
 import { CardChoiceSchema, WorkflowStageSchema } from "../schema.js";
 import { enqueue } from "../utils/queue.js";
-import type { Session, SessionStore } from "../store/index.js";
+import type { Session, SessionStore } from "../session/index.js";
 import type { Workflow } from "./graph.js";
 
 /** 被 interrupt() 打断，不是自己跑挂的 */

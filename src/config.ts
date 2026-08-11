@@ -44,6 +44,7 @@ export const config = {
 
   targetRepo: required("TARGET_REPO"),
   sessionsDir: ".sessions",
+  memoryDir: ".memory",
 } as const;
 
 export const feishu = {

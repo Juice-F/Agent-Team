@@ -1,6 +1,6 @@
 import type { z } from "zod";
 import type { WorkflowStageSchema } from "./schema.js";
-import type { Session, Turn } from "./store/index.js";
+import type { Session, Turn } from "./session/index.js";
 import type { Runner } from "./workflow/runner.js";
 
 export type Provider = "claude" | "codex";

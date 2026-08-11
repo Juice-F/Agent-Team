@@ -1,6 +1,6 @@
 import type { Agent, AgentJob, WorkflowStage } from "../types.js";
 import { WorkflowStageSchema } from "../schema.js";
-import type { SessionStore } from "../store/index.js";
+import type { SessionStore } from "../session/index.js";
 import { Runner } from "./runner.js";
 
 export interface Node {

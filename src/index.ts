@@ -1,6 +1,6 @@
 import { jobLabelMap, config } from "./config.js";
 import { modelFor } from "./model/index.js";
-import { sessionStore } from "./store/index.js";
+import { sessionStore } from "./session/index.js";
 import { workflow } from "./workflow/index.js";
 import { type AgentJob } from "./types.js";
 import { type Runner } from "./workflow/runner.js";
