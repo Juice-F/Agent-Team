@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
-import { rm, stat } from "node:fs/promises";
+import { readdir, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { resolve } from "node:path";
-import { config } from "../config.js";
 import type { Session, TaskRepo } from "../session/index.js";
 
 export class WorkspaceError extends Error {}
@@ -10,6 +10,32 @@ export class WorkspaceError extends Error {}
 const PROBE_TIMEOUT_MS = 30_000;
 /** clone 的超时。第一次拉一个大仓库能跑很久，但也不能没有底。 */
 const CLONE_TIMEOUT_MS = 600_000;
+
+/**
+ * 工作区的根，落在系统临时目录下。
+ *
+ * 不放在进程工作目录，是因为它本来就不是这个项目的东西：clone 出来的代码是可重建
+ * 的派生物，每台机器各拉各的，不该跟着代码库走，也不该指望它在机器之间共享。
+ */
+const ROOT = resolve(tmpdir(), "agent-team", "works");
+
+/**
+ * 多久没人用就清掉。
+ *
+ * 算的是「上次有人开工到现在」，不是「什么时候拉的」——每次 ensure 都会盖一下戳，
+ * 所以还在推进的任务，工作区一直是新的；真正被清掉的是那些聊崩了、或者早就收工的
+ * 仓库。定在一天：比最长的一棒（研发 1 小时）宽出一个量级，同时又不至于让临时目录
+ * 无限长大。
+ */
+const IDLE_TTL_MS = 24 * 3600_000;
+
+/**
+ * 上次开工时间的戳记，放在 `.git/` 里。
+ *
+ * 放进 `.git/` 而不是工作树，这样它既不会出现在 `git status` 里被角色当成自己的改动，
+ * 也跟着 clone 一起生灭，不用另外维护一份索引。
+ */
+const STAMP_FILE = "agent-team-used-at";
 
 /** git 地址：带协议的，或者 git@host:org/repo 这种 scp 写法 */
 const GIT_URL = /^(https?|ssh|git|file):\/\/|^[\w.+-]+@[\w.-]+:/i;
@@ -59,13 +85,8 @@ interface GitResult {
  * 要一个能进去干活的路径。
  */
 export class Workspace {
-  /** 工作区的根，`.works/`。跟着 config 走，不在构造时定死 */
-  private get root(): string {
-    return resolve(config.worksDir);
-  }
-
   /**
-   * 这个仓库的工作区路径：`.works/<仓库名>`。
+   * 这个仓库的工作区路径：`<临时目录>/agent-team/works/<仓库名>`。
    *
    * 按仓库分目录，不按任务——同一个仓库只在盘上留一份，一个大仓库拉一次就够了，
    * 目录名也是人能认出来的那个。代价是同一个仓库上并行的两个任务共用一份工作树，
@@ -73,7 +94,7 @@ export class Workspace {
    */
   dirOf(repo: TaskRepo): string {
     const safe = repoName(repo.source).replace(/[^a-zA-Z0-9_.-]/g, "_");
-    return resolve(this.root, safe);
+    return resolve(ROOT, safe);
   }
 
   /**
@@ -151,11 +172,17 @@ export class Workspace {
       throw new WorkspaceError(`任务 ${task.id} 还没定仓库，没法准备工作区`);
     }
 
+    // 顺手把过期的收拾掉。开工前反正要动盘，这时候扫一遍最省事——不然临时目录里
+    // 那些聊崩了、收了工的仓库没人管，只会一直堆着。
+    await this.sweep();
+
     const dir = this.dirOf(repo);
-    if (await this.isRepo(dir)) return dir;
-    // 上次拉到一半死掉留下的半个目录，留着只会让 clone 报「目录非空」
-    await rm(dir, { recursive: true, force: true });
-    await this.clone(repo, dir);
+    if (!(await this.isRepo(dir))) {
+      // 上次拉到一半死掉留下的半个目录，留着只会让 clone 报「目录非空」
+      await rm(dir, { recursive: true, force: true });
+      await this.clone(repo, dir);
+    }
+    await this.touch(dir);
     return dir;
   }
 
@@ -165,6 +192,51 @@ export class Workspace {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * 清掉闲了太久的工作区。
+   *
+   * 清不掉不算错——别的进程正在用、盘上文件锁着，都可能让 rm 失败。工作区丢了能重拉，
+   * 为了扫不干净把开工这件事拦下来不值当。
+   */
+  private async sweep(): Promise<void> {
+    let names: string[];
+    try {
+      names = await readdir(ROOT);
+    } catch {
+      return;
+    }
+
+    const now = Date.now();
+    for (const name of names) {
+      const dir = resolve(ROOT, name);
+      const usedAt = await this.lastUsedAt(dir);
+      // 读不出日子的当它还活着。多留一个目录，比误删一个正在干活的工作区强得多
+      if (usedAt === null || now - usedAt < IDLE_TTL_MS) continue;
+      await rm(dir, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+
+  /** 盖一下「刚用过」的戳。clone 完 `.git/` 一定在，写不进去也不用管——大不了下次被当成老的清掉重拉 */
+  private async touch(dir: string): Promise<void> {
+    await writeFile(
+      resolve(dir, ".git", STAMP_FILE),
+      `${new Date().toISOString()}\n`,
+      "utf8",
+    ).catch(() => {});
+  }
+
+  /** 上次开工是什么时候。没有戳记的（拉到一半死掉的半个目录）退回看目录自己的 mtime */
+  private async lastUsedAt(dir: string): Promise<number | null> {
+    for (const path of [resolve(dir, ".git", STAMP_FILE), dir]) {
+      try {
+        return (await stat(path)).mtimeMs;
+      } catch {
+        // 换下一个来源
+      }
+    }
+    return null;
   }
 
   /** 拉仓库的默认分支。要哪条分支不用问——拉下来就是它自己的默认分支 */

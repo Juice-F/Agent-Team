@@ -41,10 +41,6 @@ export const config = {
       timeoutMs: 600_000
     },
   } satisfies Record<AgentJob, AgentSpec>,
-
-  worksDir: ".works",
-  sessionsDir: ".sessions",
-  memoryDir: ".memory",
 } as const;
 
 export const feishu = {

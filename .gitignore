@@ -15,12 +15,6 @@ build/
 # 会话状态（运行时中间态，不应入库）
 .sessions/
 
-# 工作区：每个任务 clone 出来的代码，丢了能重新拉
-.works/
-
-# 记忆（本地积累，跟人不跟库）
-.memory/
-
 # 日志
 *.log
 npm-debug.log*

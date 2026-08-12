@@ -1,8 +1,15 @@
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { z } from "zod";
-import { config } from "../config.js";
 import { WorkflowStageEnum } from "../schema.js";
+
+/**
+ * 任务落盘的地方，进程工作目录下的 `.sessions/`。
+ *
+ * 写死在这儿而不是放进 config：它是这个 store 的实现细节，外面没人需要知道任务
+ * 存在哪。等这层换成 Redis，改的也只有这个文件。
+ */
+const SESSIONS_DIR = ".sessions";
 
 export const TurnSchema = z.object({
   role: z.enum(["user", "assistant"]),
@@ -122,7 +129,7 @@ export type Session = z.infer<typeof SessionSchema>;
 
 export class SessionStore {
   private get dir(): string {
-    return resolve(config.sessionsDir);
+    return resolve(SESSIONS_DIR);
   }
 
   private fileOf(threadId: string): string {
