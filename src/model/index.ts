@@ -1,4 +1,4 @@
-import { config } from "../config.js";
+import { modelConfig } from "../config.js";
 import type { AgentJob, AgentSpec } from "../types.js";
 import { Model } from "./base.js";
 import { ClaudeModel } from "./claude/index.js";
@@ -18,7 +18,7 @@ const cache = new Map<string, Model>();
 export function modelFor(job: AgentJob): Model {
   // 标注成 AgentSpec 是必要的：config 那边用了 satisfies，provider 保留成字面量
   // 类型。四个角色碰巧都配 claude 时，modelOf 里那句比较会被判成「两边没有交集」而报错
-  const spec: AgentSpec = config.agents[job];
+  const spec: AgentSpec = modelConfig.agents[job];
   return modelOf(spec);
 }
 

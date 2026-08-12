@@ -1,15 +1,21 @@
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
 import { z } from "zod";
+import { NS, redis } from "../redis.js";
 import { WorkflowStageEnum } from "../schema.js";
 
+/** 任务在 Redis 里的键：`agent-team:session:<话题 ID>` */
+const KEY_PREFIX = `${NS}:session:`;
+
 /**
- * 任务落盘的地方，进程工作目录下的 `.sessions/`。
+ * 一条任务多久没写过就让 Redis 自己收走。
  *
- * 写死在这儿而不是放进 config：它是这个 store 的实现细节，外面没人需要知道任务
- * 存在哪。等这层换成 Redis，改的也只有这个文件。
+ * 每次 save 都重新盖上，所以算的是「最后一次动它到现在」：还在推进的任务永远不会
+ * 过期，被收走的是聊崩了、或者早就收了工的。30 天是按人来定的——一个需求停在等人
+ * 确认的状态上放一个月还没人管，它就已经不是活的了。
  */
-const SESSIONS_DIR = ".sessions";
+const TTL_SECONDS = 7 * 24 * 3600;
+
+/** SCAN 一趟捞多少。纯粹是 round-trip 次数和单次阻塞时长之间的取舍 */
+const SCAN_COUNT = 200;
 
 export const TurnSchema = z.object({
   role: z.enum(["user", "assistant"]),
@@ -128,16 +134,11 @@ export const SessionSchema = z.object({
 export type Session = z.infer<typeof SessionSchema>;
 
 export class SessionStore {
-  private get dir(): string {
-    return resolve(SESSIONS_DIR);
+  private keyOf(threadId: string): string {
+    return `${KEY_PREFIX}${threadId}`;
   }
 
-  private fileOf(threadId: string): string {
-    const safe = threadId.replace(/[^a-zA-Z0-9_-]/g, "_");
-    return resolve(this.dir, `${safe}.json`);
-  }
-
-  /** T20260805-2345-a1b2 */
+  /** Task-20260805-2345-a1b2 */
   makeId(at: Date, rootMessageId: string): string {
     const p = (n: number) => String(n).padStart(2, "0");
     const stamp =
@@ -147,45 +148,68 @@ export class SessionStore {
       .replace(/[^a-zA-Z0-9]/g, "")
       .slice(-4)
       .toLowerCase();
-    return `T${stamp}-${suffix}`;
+    return `Task-${stamp}-${suffix}`;
   }
 
   async load(threadId: string): Promise<Session | null> {
+    const raw = await (await redis.conn()).get(this.keyOf(threadId));
+    return raw === null ? null : this.parse(raw);
+  }
+
+  /** 整份覆盖写，顺手把过期时间重新盖上 */
+  async save(task: Session): Promise<Session> {
+    const next: Session = { ...task, updatedAt: new Date().toISOString() };
+    await (await redis.conn()).set(this.keyOf(task.threadId), JSON.stringify(next), {
+      expiration: { type: "EX", value: TTL_SECONDS },
+    });
+    return next;
+  }
+
+  async create(task: Session): Promise<{ created: boolean; task: Session }> {
+    const next: Session = { ...task, updatedAt: new Date().toISOString() };
+    const ok = await (await redis.conn()).set(
+      this.keyOf(task.threadId),
+      JSON.stringify(next),
+      { condition: "NX", expiration: { type: "EX", value: TTL_SECONDS } },
+    );
+    if (ok) return { created: true, task: next };
+    // 抢输了就用赢的那条往下走。刚好在这一瞬过期（几乎不可能）就退回自己手里这份
+    const existing = await this.load(task.threadId);
+    return { created: false, task: existing ?? next };
+  }
+
+  /**
+   * 全部任务，给启动时捡漏用。
+   *
+   * 用 SCAN 不用 KEYS：KEYS 会把整个 Redis 阻塞住，而这个库不只我们在用。代价是
+   * SCAN 给的是「大致这些」——扫的过程中新建的可能扫不到。对捡漏来说够了：那种任务
+   * 本来就是刚建的，有人正管着它。
+   */
+  async list(): Promise<Session[]> {
+    const client = await redis.conn();
+    const tasks: Session[] = [];
+
+    for await (const keys of client.scanIterator({
+      MATCH: `${KEY_PREFIX}*`,
+      COUNT: SCAN_COUNT,
+    })) {
+      if (keys.length === 0) continue;
+      for (const raw of await client.mGet(keys)) {
+        // 扫到和取值之间过期了就是 null，跳过
+        const task = raw === null ? null : this.parse(raw);
+        if (task) tasks.push(task);
+      }
+    }
+    return tasks;
+  }
+
+  private parse(raw: string): Session | null {
     try {
-      const raw = await readFile(this.fileOf(threadId), "utf8");
       const parsed = SessionSchema.safeParse(JSON.parse(raw));
       return parsed.success ? parsed.data : null;
     } catch {
       return null;
     }
-  }
-
-  async save(task: Session): Promise<Session> {
-    await mkdir(this.dir, { recursive: true });
-    const next: Session = { ...task, updatedAt: new Date().toISOString() };
-    await writeFile(
-      this.fileOf(task.threadId),
-      JSON.stringify(next, null, 2),
-      "utf8",
-    );
-    return next;
-  }
-
-  async list(): Promise<Session[]> {
-    let files: string[];
-    try {
-      files = await readdir(this.dir);
-    } catch {
-      return [];
-    }
-
-    const tasks: Session[] = [];
-    for (const file of files) {
-      if (!file.endsWith(".json")) continue;
-      const task = await this.load(file.slice(0, -".json".length));
-      if (task) tasks.push(task);
-    }
-    return tasks;
   }
 }
 

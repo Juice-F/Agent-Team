@@ -1,7 +1,7 @@
 import * as lark from "@larksuiteoapi/node-sdk";
 import { jobLabelMap } from "../config.js";
 import type { AgentJob, Inbound } from "../types.js";
-import { enqueue, isDuplicate } from "../utils/queue.js";
+import { enqueue } from "../utils/queue.js";
 import { hasButtons, settleCard, type Card } from "./card.js";
 import type { OnProgress } from "../model/index.js";
 
@@ -269,10 +269,7 @@ export class FeishuChannel {
 
   private async receive(data: ReceiveEvent): Promise<void> {
     const { message, sender } = data;
-    
-    // 按角色去重：四个应用各收各的
-    if (isDuplicate(this.role, data.event_id)) return;
-    
+
     if (sender.sender_id?.open_id === this.openId) return;
     if (sender.sender_type === "bot" && !this.mentionsMe(message)) return;
     if (message.message_type !== "text") return;

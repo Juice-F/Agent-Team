@@ -1,5 +1,6 @@
-import { jobLabelMap, config } from "./config.js";
+import { jobLabelMap } from "./config.js";
 import { modelFor } from "./model/index.js";
+import { redis } from "./redis.js";
 import { sessionStore } from "./session/index.js";
 import { workflow } from "./workflow/index.js";
 import { type AgentJob } from "./types.js";
@@ -16,16 +17,23 @@ async function main(): Promise<void> {
     );
   }
 
-  // 拉起所有角色的服务，顺便把上次中断在半路的任务捡回来接着跑
+  await redis.connect();
   runner = await workflow.run(sessionStore);
 }
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
-    // 掐掉正在跑的模型调用。任务文件这时还写着 running，下次启动照样捡得回来，
+    // 掐掉正在跑的模型调用。任务这时在库里还写着 running，下次启动照样捡得回来，
     const stopped = runner?.interruptAll("进程退出") ?? 0;
     console.log(stopped ? `\n正在退出…（中断 ${stopped} 个任务）` : "\n正在退出…");
-    process.exit(0);
+    void redis
+      .close()
+      .catch((err: unknown) => {
+        console.error("[redis] 关闭失败", err);
+      })
+      .finally(() => {
+        process.exit(0);
+      });
   });
 }
 

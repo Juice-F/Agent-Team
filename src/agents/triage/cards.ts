@@ -43,6 +43,14 @@ export function threadOpened(): Card {
   });
 }
 
+export function alreadyFiled(): Card {
+  return generateCard({
+    tone: "info",
+    title: "这次对话已经立过项了",
+    note: "去那个话题里接着说；要提新需求，在群里 @话题助手 重新立项",
+  });
+}
+
 export function threadUnsupported(): Card {
   return generateCard({
     tone: "error",
@@ -124,23 +132,5 @@ export function opening(reply: string): Card {
     title: "已开话题",
     body: reply,
     note: "在话题里直接回就行，不用再 @ 我",
-  });
-}
-
-export function preparing(repo: TaskRepo): Card {
-  return generateCard({
-    tone: "progress",
-    title: "正在准备工作区",
-    body: `拉 **${repoLabel(repo)}** 的代码，第一次可能要等一会儿。`,
-  });
-}
-
-export function prepareFailed(repo: TaskRepo, reason: string): Card {
-  return generateCard({
-    tone: "error",
-    title: "工作区没准备好",
-    body: `**${repoLabel(repo)}** 拉不下来，任务先停在这儿。`,
-    detail: reason,
-    detailLabel: "查看报错",
   });
 }

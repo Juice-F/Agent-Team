@@ -14,7 +14,7 @@ export const jobLabelMap: Record<AgentJob, string> = {
   review: "代码审查",
 } as const;
 
-export const config = {
+export const modelConfig = {
   agents: {
     triage: { 
       provider: "claude",
@@ -43,7 +43,11 @@ export const config = {
   } satisfies Record<AgentJob, AgentSpec>,
 } as const;
 
-export const feishu = {
+export const redisConfig = {
+  url: process.env["REDIS_URL"] ?? "redis://127.0.0.1:6379",
+} as const;
+
+export const feishuConfig = {
   triage: {
     appId: required("FEISHU_TRIAGE_APP_ID"),
     appSecret: required("FEISHU_TRIAGE_APP_SECRET"),

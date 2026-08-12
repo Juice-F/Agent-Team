@@ -12,12 +12,9 @@ import {
   type ProductOutput,
 } from "./schema.js";
 
-/**
- *
- *   spec       拿澄清完的需求，跟用户来回确认，拆成研发能照着写的方案
- *   accepting  拿审查通过的那轮改动验收；通过交给 done，不通过打回 spec 自己重拆
- *
- */
+type SpecContext = Extract<StepContext, { stage: "spec" }>;
+type AcceptingContext = Extract<StepContext, { stage: "accepting" }>;
+
 export class ProductAgent extends BaseAgent {
   constructor() {
     super("product", ["spec", "accepting"]);
@@ -36,19 +33,9 @@ export class ProductAgent extends BaseAgent {
 
   protected async onGroup(_msg: Inbound): Promise<void> {}
 
-  /**
-   * 拆解一轮。
-   *
-   * 停在这一棒的时间里，用户在话题里说的每一句、点的每一个按钮，都会再进来一次
-   * ——多轮就是这么来的，不在这个方法里循环。
-   */
   private async spec(ctx: SpecContext): Promise<StepResult> {
-    // 只读自己这一段。澄清阶段那几轮不看——问清楚之后的复述就在 request 里，
-    // 再把话题助手的往返读一遍只是噪音。
     const prevTurns = ctx.task.turns[ctx.stage] ?? [];
 
-    // 点了「就按这个做」：他认可的是卡片上那一版，直接拿盘上存的那份交棒。
-    // 再问一次模型的话，拿回来的可能已经不是他看过的方案了。
     if (ctx.message?.confirmed && ctx.task.plan) {
       await this.bot.replyCard(ctx.task.rootMessageId, cards.handOff(ctx.task), {
         inThread: true,
@@ -79,7 +66,6 @@ export class ProductAgent extends BaseAgent {
       return { kind: "wait", patch: { turns } };
     }
 
-    // 出了方案也不能自己往下走，等用户点确认。plan 落盘，因为这一等可能跨进程重启。
     await this.bot.patchCard(card, cards.drafted(ctx.task, result));
     return { kind: "wait", patch: { turns, plan: result.plan } };
   }
@@ -107,11 +93,13 @@ export class ProductAgent extends BaseAgent {
     }
   }
 
-  private decide(
+  private async decide(
     ctx: SpecContext,
     turns: Turn[],
     onProgress: OnProgress,
   ): Promise<ProductOutput> {
+    const dir = await workspace.ensure(ctx.task);
+
     const transcript = turns
       .map((t) => `${t.role === "user" ? "用户" : "你"}：${t.text}`)
       .join("\n");
@@ -131,20 +119,13 @@ export class ProductAgent extends BaseAgent {
       system: SPEC_SYSTEM,
       user: parts.join("\n\n"),
       schema: ProductOutputSchema,
+      // 只读：这一棒是拆方案，代码是拿来看的，动手是研发那一棒的事
+      repo: { path: dir, write: false },
       onProgress,
       signal: ctx.signal,
     });
   }
-
-  /**
-   * 验收一轮。
-   *
-   * 两条出路都要人点一下才走：收工是终点，打回是产品重拆、研发重写、审查重看
-   * 整整一圈。哪条都不该由模型自己拍板——最后签字的是提需求的人。
-   *
-   * 卡片上只有一个「确认」按钮，点下去往哪走看 acceptNote 空不空：产品判没过时
-   * 会把重拆用的新需求写进去，判过了就清空。
-   */
+  
   private async accept(ctx: AcceptingContext): Promise<StepResult> {
     if (ctx.message?.confirmed) {
       if (ctx.task.acceptNote) {
@@ -223,6 +204,3 @@ export class ProductAgent extends BaseAgent {
     });
   }
 }
-
-type SpecContext = Extract<StepContext, { stage: "spec" }>;
-type AcceptingContext = Extract<StepContext, { stage: "accepting" }>;

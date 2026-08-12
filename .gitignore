@@ -12,9 +12,6 @@ dist/
 build/
 *.tsbuildinfo
 
-# 会话状态（运行时中间态，不应入库）
-.sessions/
-
 # 日志
 *.log
 npm-debug.log*

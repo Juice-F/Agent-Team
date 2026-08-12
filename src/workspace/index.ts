@@ -6,18 +6,9 @@ import type { Session, TaskRepo } from "../session/index.js";
 
 export class WorkspaceError extends Error {}
 
-/** 探一下仓库通不通。用户手打的地址，敲错一个字符是常事，别等 clone 才发现。 */
 const PROBE_TIMEOUT_MS = 30_000;
-/** clone 的超时。第一次拉一个大仓库能跑很久，但也不能没有底。 */
 const CLONE_TIMEOUT_MS = 600_000;
-
-/**
- * 工作区的根，落在系统临时目录下。
- *
- * 不放在进程工作目录，是因为它本来就不是这个项目的东西：clone 出来的代码是可重建
- * 的派生物，每台机器各拉各的，不该跟着代码库走，也不该指望它在机器之间共享。
- */
-const ROOT = resolve(tmpdir(), "agent-team", "works");
+const ROOT = resolve(tmpdir(), "works");
 
 /**
  * 多久没人用就清掉。
@@ -41,6 +32,11 @@ const STAMP_FILE = "agent-team-used-at";
 const GIT_URL = /^(https?|ssh|git|file):\/\/|^[\w.+-]+@[\w.-]+:/i;
 /** 本机路径：盘符开头、斜杠开头、UNC、或者 ./ ../ */
 const LOCAL_PATH = /^[a-zA-Z]:[\\/]|^[\\/]|^\.{1,2}[\\/]/;
+
+/** 能安全当目录名用的那一份。中文、空格、冒号这些一律抹平 */
+function safeName(raw: string): string {
+  return raw.replace(/[^a-zA-Z0-9_.-]/g, "_");
+}
 
 /** 仓库地址里给人看的那截：去掉路径和 .git，剩下仓库名 */
 export function repoName(source: string): string {
@@ -86,15 +82,17 @@ interface GitResult {
  */
 export class Workspace {
   /**
-   * 这个仓库的工作区路径：`<临时目录>/agent-team/works/<仓库名>`。
+   * 这个任务的工作区路径：`<临时目录>/agent-team/works/<仓库名>-<任务号>`。
    *
-   * 按仓库分目录，不按任务——同一个仓库只在盘上留一份，一个大仓库拉一次就够了，
-   * 目录名也是人能认出来的那个。代价是同一个仓库上并行的两个任务共用一份工作树，
-   * 会看见对方改到一半的文件。
+   * 按任务分，不按仓库：同一个仓库上可能同时挂着好几个需求（一个人开两个话题就够
+   * 了），共用一份工作树的话，这一棒会看见另一棒改到一半的文件，最后交出去的 diff
+   * 是两个需求混在一起的。代价是同一个仓库有几个任务就完整拉几遍——按目前的用量，
+   * 一个仓库并发多个任务本来就少见，不值得为它去共享对象库。
+   *
+   * 目录名带上仓库名纯粹是给人看的：出问题时进临时目录一眼认得出是谁。
    */
-  dirOf(repo: TaskRepo): string {
-    const safe = repoName(repo.source).replace(/[^a-zA-Z0-9_.-]/g, "_");
-    return resolve(ROOT, safe);
+  dirOf(taskId: string, repo: TaskRepo): string {
+    return resolve(ROOT, `${safeName(repoName(repo.source))}-${safeName(taskId)}`);
   }
 
   /**
@@ -172,11 +170,11 @@ export class Workspace {
       throw new WorkspaceError(`任务 ${task.id} 还没定仓库，没法准备工作区`);
     }
 
-    // 顺手把过期的收拾掉。开工前反正要动盘，这时候扫一遍最省事——不然临时目录里
-    // 那些聊崩了、收了工的仓库没人管，只会一直堆着。
+    // 顺手把过期的收拾掉。开工前反正要动盘，这时候扫一遍最省事——按任务分目录之后
+    // 盘上的东西是跟着任务数涨的，没人扫就只会一直堆着。
     await this.sweep();
 
-    const dir = this.dirOf(repo);
+    const dir = this.dirOf(task.id, repo);
     if (!(await this.isRepo(dir))) {
       // 上次拉到一半死掉留下的半个目录，留着只会让 clone 报「目录非空」
       await rm(dir, { recursive: true, force: true });

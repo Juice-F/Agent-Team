@@ -1,4 +1,4 @@
-import { feishu } from "../config.js";
+import { feishuConfig } from "../config.js";
 import type { Runner } from "../workflow/runner.js";
 import type { Session } from "../session/index.js";
 import type {
@@ -9,7 +9,6 @@ import type {
   StepResult,
   WorkflowStage,
 } from "../types.js";
-import { generateCard } from "../feishu/card.js";
 import { FeishuChannel } from "../feishu/index.js";
 
 export abstract class BaseAgent implements Agent {
@@ -20,7 +19,7 @@ export abstract class BaseAgent implements Agent {
     readonly job: AgentJob,
     readonly handles: readonly WorkflowStage[],
   ) {
-    this.bot = new FeishuChannel(job, feishu[job]);
+    this.bot = new FeishuChannel(job, feishuConfig[job]);
   }
 
   get openId(): string {
@@ -47,28 +46,4 @@ export abstract class BaseAgent implements Agent {
   abstract run(ctx: StepContext): Promise<StepResult>;
 
   protected abstract onGroup(msg: Inbound): Promise<void>;
-
-  /**
-   * 占位不写成空实现——任务是真的会停在这个阶段的，群里得看得见它停在哪，否则
-   * 一个需求立完项就没声了，谁也分不清是卡住了还是压根没跑起来。
-   */
-  protected async pending(
-    ctx: StepContext,
-    what: string,
-  ): Promise<StepResult> {
-    // 上一棒刚交过来的时候报个到就行；停在这之后话题里的讨论先不接
-    if (ctx.message) return { kind: "wait" };
-
-    await this.bot.replyCard(
-      ctx.task.rootMessageId,
-      generateCard({
-        tone: "info",
-        title: `${what}：还没接入`,
-        subtitle: ctx.task.id,
-        body: `任务停在 **${ctx.stage}**，这个角色实现之后会从这里接着走。`,
-      }),
-      { inThread: true },
-    );
-    return { kind: "wait" };
-  }
 }
