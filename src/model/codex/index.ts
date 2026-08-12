@@ -41,6 +41,14 @@ export class CodexModel extends Model {
         cwd: opts.repo?.path ?? dir,
         stdin: `${opts.system}\n\n---\n\n${opts.user}`,
         signal: opts.signal,
+        // 只有开着工具跑的才排队；纯生成几秒就完，不占重活的位置
+        gate: opts.repo ? (opts.repo.write ? "coding" : "reading") : null,
+        onQueued: opts.onProgress && ((waiting) => {
+          opts.onProgress?.({
+            kind: "queued",
+            text: waiting ? "前面还有任务在跑，轮到就开始" : "",
+          });
+        }),
         args: [
           "exec",
           "--skip-git-repo-check",

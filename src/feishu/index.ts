@@ -1,8 +1,7 @@
 import * as lark from "@larksuiteoapi/node-sdk";
 import { jobLabelMap } from "../config.js";
 import type { AgentJob, Inbound } from "../types.js";
-import { enqueue } from "../utils/queue.js";
-import { hasButtons, settleCard, type Card } from "./card.js";
+import { generateCard, hasButtons, settleCard, type Card } from "./card.js";
 import type { OnProgress } from "../model/index.js";
 
 type ReceiveEvent = Parameters<
@@ -23,7 +22,12 @@ export interface Posted {
 export interface ChannelHandler {
   /** 主群里的消息（不在任何话题内）。@ 不 @ 我都算。 */
   onGroup?(msg: Inbound): Promise<void>;
-  /** 话题内的消息。已按话题串行，同一话题不会并发进来。 */
+  /**
+   * 话题内的消息。
+   *
+   * 这里不做串行，收到就交出去——同一话题同一时刻只跑一棒这件事归 Runner 管，
+   * 它那把锁是跨进程的。
+   */
   onThread?(threadId: string, msg: Inbound): Promise<void>;
   /**
    * 用户点了卡片上的按钮。返回的话会以 toast 的形式弹给点的那个人。
@@ -202,6 +206,21 @@ export class FeishuChannel {
 
     return {
       on: (p) => {
+        // 排队不是「进度」，是「还没轮到」。换一张卡片说清楚，不然用户看到的是
+        // 一张写着「拆解中」却半天不动的卡——那和卡死了没有区别。
+        if (p.kind === "queued") {
+          if (stopped) return;
+          lastAt = Date.now();
+          void this.patchCard(
+            messageId,
+            p.text
+              ? generateCard({ tone: "progress", title: "排队中", body: p.text })
+              : // 空串是「排到了」，换回这一棒本来的那张
+                render(""),
+          );
+          return;
+        }
+
         buffer = p.kind === "tool" ? `调用 ${p.text}` : buffer + p.text;
 
         const now = Date.now();
@@ -287,9 +306,9 @@ export class FeishuChannel {
 
     const threadId = message.thread_id;
     if (threadId) {
-      const onThread = this.handler.onThread;
-      if (!onThread) return;
-      await enqueue(threadId, () => onThread.call(this.handler, threadId, inbound));
+      // 直接交出去，这儿不排队：同一话题的串行归 Runner 管，它排的是 Redis 里
+      // 那条跨进程的队列——排在本进程内存里的话，多副本之间互相看不见
+      await this.handler.onThread?.(threadId, inbound);
       return;
     }
 

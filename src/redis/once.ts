@@ -1,4 +1,27 @@
-import { NS, redis } from "../redis.js";
+import { NS, redis } from "./index.js";
+
+/**
+ * 一件事在这段时间里只让一个人做成。
+ *
+ * `SET NX` 就是这个语义：抢到的返回 true，后面来的全是 false，判定发生在 Redis
+ * 里而不是某个进程的内存里，所以多副本下也只有一个抢得到。
+ *
+ * Redis 出问题时放行（当作抢到了）：占位失败最多让一件事重做一次，而拦下来是让
+ * 用户的消息凭空消失——后者难查得多。
+ */
+export async function claim(key: string, ttlSeconds: number): Promise<boolean> {
+  try {
+    const client = await redis.conn();
+    const ok = await client.set(`${NS}:${key}`, "1", {
+      condition: "NX",
+      expiration: { type: "EX", value: ttlSeconds },
+    });
+    return ok !== null;
+  } catch (err) {
+    console.error("[once] 占位失败，放行", err);
+    return true;
+  }
+}
 
 /**
  * 这个会话单元能不能立项。抢到的那条消息才往下走，后面的一律不再开新任务。

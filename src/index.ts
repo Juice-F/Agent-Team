@@ -1,6 +1,6 @@
 import { jobLabelMap } from "./config.js";
 import { modelFor } from "./model/index.js";
-import { redis } from "./redis.js";
+import { redis } from "./redis/index.js";
 import { sessionStore } from "./session/index.js";
 import { workflow } from "./workflow/index.js";
 import { type AgentJob } from "./types.js";

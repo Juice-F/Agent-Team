@@ -1,13 +1,20 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { z } from "zod";
+import { withGate, type GateKind } from "../redis/gate.js";
 import type { AgentSpec } from "../types.js";
 
 export class ModelError extends Error {}
 
 export interface ModelProgress {
-  kind: "thinking" | "text" | "tool";
-  /** kind 为 tool 时是工具名，其余是模型写出来的话 */
+  /**
+   * queued 是「还没开跑，在排队等一个槽位」——见 redis/gate.ts。
+   *
+   * 和其余三种不是一类：那三种是模型正在吐东西，这个是「什么都没发生，但不是卡
+   * 住了」。得让它显示成完全不同的样子，不然用户看到的就是一张停住不动的卡片。
+   */
+  kind: "thinking" | "text" | "tool" | "queued";
+  /** kind 为 tool 时是工具名；queued 时是排队的说明，空串表示排到了 */
   text: string;
 }
 
@@ -88,7 +95,46 @@ export abstract class Model {
     );
   }
 
-  protected run(input: {
+  /**
+   * 起一个 CLI 子进程把活干完。
+   *
+   * `gate` 决定这次要不要先排队等一个槽位：开着工具跑的那几棒才算重活，纯生成
+   * （立项判断、意图分类）几秒就完，闸它们只会让它们去抢本该留给重活的位置。
+   *
+   * 闸在这一层而不是外面，是因为超时得从**真正开跑**那一刻算起：`spec.timeoutMs`
+   * 是给模型的，不是给排队的。等槽位的时间要是也算进去，高峰期一堆任务会在还没
+   * 开跑的时候就被判超时。
+   */
+  protected async run(input: {
+    bin: string;
+    args: string[];
+    stdin: string;
+    cwd: string;
+    onLine?: (line: string) => void;
+    signal?: AbortSignal;
+    /** 要占哪个闸门的槽位。纯生成传 null，不排队 */
+    gate?: GateKind | null;
+    /** 开始排队时给 true，抢到槽位开跑时给 false。用来让卡片说句话 */
+    onQueued?: (waiting: boolean) => void;
+  }): Promise<RunResult> {
+    if (!input.gate) return this.launch(input);
+    const gate = input.gate;
+
+    return withGate(
+      gate,
+      input.signal,
+      () => {
+        input.onQueued?.(false);
+        return this.launch(input);
+      },
+      () => {
+        console.log(`[gate] ${this.name} 排队等 ${gate} 槽位`);
+        input.onQueued?.(true);
+      },
+    );
+  }
+
+  private launch(input: {
     bin: string;
     args: string[];
     stdin: string;

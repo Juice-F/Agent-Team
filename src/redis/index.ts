@@ -1,5 +1,5 @@
 import { createClient } from "redis";
-import { redisConfig } from "./config.js";
+import { redisConfig } from "../config.js";
 
 type Client = ReturnType<typeof createClient>;
 

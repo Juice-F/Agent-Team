@@ -43,6 +43,12 @@ export const modelConfig = {
   } satisfies Record<AgentJob, AgentSpec>,
 } as const;
 
+export const gateConfig = {
+  localMax: 2,
+  codingMax: 5,
+  readingMax: 8,
+} as const;
+
 export const redisConfig = {
   url: process.env["REDIS_URL"] ?? "redis://127.0.0.1:6379",
 } as const;

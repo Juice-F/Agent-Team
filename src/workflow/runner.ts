@@ -1,16 +1,59 @@
+import { z } from "zod";
 import type { Agent, AgentJob, Inbound, StepContext, StepResult } from "../types.js";
 import type { CardAction } from "../feishu/index.js";
-import { CardChoiceSchema, WorkflowStageSchema } from "../schema.js";
-import { enqueue } from "../utils/queue.js";
+import { CardChoiceSchema, WorkflowStageEnum, WorkflowStageSchema } from "../schema.js";
+import {
+  acquireThread,
+  pendingCount,
+  popPending,
+  pushPending,
+  threadBusy,
+  type Lease,
+} from "../redis/queue.js";
+import { claim } from "../redis/once.js";
 import type { Session, SessionStore } from "../session/index.js";
 import type { Workflow } from "./graph.js";
 
 /** 被 interrupt() 打断，不是自己跑挂的 */
 export class Interrupted extends Error {}
 
+/** 「正在忙着呢」这句话多久只说一次 */
+const HINT_TTL_SECONDS = 300;
+
+const JOBS = ["triage", "product", "dev", "review"] as const satisfies readonly AgentJob[];
+
+const InboundSchema = z.object({
+  text: z.string(),
+  messageId: z.string(),
+  chatId: z.string(),
+  fromBot: z.boolean(),
+  confirmed: z.boolean().optional(),
+  data: z.record(z.string(), z.string()).optional(),
+});
+
+/**
+ * 排在话题队列里的一条待办。
+ *
+ * 存的是事件而不是闭包：这条队列在 Redis 里，可能由另一台机器上的副本取出来处理，
+ * 所以进去的必须是能序列化、也能凭它重建出「该干什么」的东西。
+ */
+const PendingEventSchema = z.object({
+  /** 哪个角色收到的。取出来处理时会拿它和当时的阶段主人对一遍 */
+  job: z.enum(JOBS),
+  /** 触发这一轮的用户消息。被上一棒推起来的、启动捡漏的都是 null */
+  msg: InboundSchema.nullable(),
+  /**
+   * 点按钮那张卡片当时所在的阶段，用来认过期。
+   *
+   * 卡片会一直留在话题里，翻上去点一张旧的，得认得出来任务早就走远了。打字进来
+   * 的消息没有这一层，是 null。
+   */
+  stage: WorkflowStageEnum.nullable().default(null),
+});
+type PendingEvent = z.infer<typeof PendingEventSchema>;
+
 export class Runner {
   private readonly inflight = new Map<string, AbortController>();
-  private readonly clicking = new Set<string>();
 
   constructor(
     private readonly graph: Workflow,
@@ -24,13 +67,15 @@ export class Runner {
 
   // 话题里接收消息
   async deliver(job: AgentJob, threadId: string, msg: Inbound): Promise<void> {
-    const task = await this.store.load(threadId);
-    if (!task) return;
-    if (this.graph.ownerOf(task.stage) !== job) return;
-    
-    await this.step(task, msg.fromBot ? null : msg);
+    // 归不归自己管，等取出来处理时再判——排队期间阶段可能就变了。四个角色都会
+    // 收到同一条消息，各排各的，取出来时只有当时的阶段主人那条会真的开跑。
+    await this.take(
+      threadId,
+      { job, msg, stage: null },
+      // 交棒的 @ 消息不是人在说话，别对它说「我正忙着」
+      { hint: !msg.fromBot },
+    );
   }
-
 
   /**
    * 话题里点了卡片上的按钮。
@@ -38,55 +83,44 @@ export class Runner {
    * 点一下等同于在话题里说了按钮上那句话，所以翻成一条消息走跟打字一模一样的
    * 路。返回的话会弹给点按钮的人看。
    *
+   * 这里先验一遍只是为了给点按钮的人一个即时的说法（找不到任务、卡片过期），
+   * 真正作数的是取出来处理时那一遍——排队期间话题里可能已经聊过好几轮了。
+   *
+   * 连点两下不再单独挡：飞书那边第一下就把按钮抹掉了，两下都进来的话，锁保证它
+   * 们一前一后，第二条取出来时阶段已经推进过，会被当成过期卡片丢掉。
    */
   async click(job: AgentJob, action: CardAction): Promise<string> {
     const parsed = CardChoiceSchema.safeParse(action.value);
     if (!parsed.success) return "这个按钮的参数不对，可能是旧版本发的卡片";
     const choice = parsed.data;
 
-    // 占位得在第一个 await 之前，而且要同步占。连点两下是两次并发回调，等 load
-    // 回来再判的话，两边看到的都是「没人在跑」，一样会跑出两遍。
-    if (this.clicking.has(choice.threadId)) return "上一次还在处理，等一下";
-    this.clicking.add(choice.threadId);
-
-    let queued = false;
-    try {
-      const task = await this.store.load(choice.threadId);
-      if (!task) return "找不到这个任务";
-      if (this.graph.ownerOf(task.stage) !== job) return "这一步已经不归我管了";
-      if (task.stage !== choice.stage) {
-        return `任务已经走到「${this.graph.at(task.stage).label}」，这张卡片过期了`;
-      }
-
-      const message: Inbound = {
-        text: choice.text,
-        messageId: action.messageId,
-        chatId: action.chatId,
-        fromBot: false,
-        confirmed: choice.confirm,
-        // 用户填的盖住按钮上写死的：同一个名字，他填的那份才是他眼前看到的
-        data: { ...choice.data, ...action.formValue },
-      };
-      const done = enqueue(choice.threadId, async () => {
-        // 排到队头时盘上那份才作数——排队期间话题里可能已经聊过好几轮了
-        const fresh = await this.store.load(choice.threadId);
-        if (!fresh || fresh.stage !== choice.stage) return;
-        await this.step(fresh, message);
-      });
-      queued = true;
-
-      void done
-        .catch((err: unknown) => {
-          console.error(`[click] ${task.id} ${task.stage}`, err);
-        })
-        // 那一棒真跑完了才放开，不是排上队就放开
-        .finally(() => this.clicking.delete(choice.threadId));
-
-      return "收到";
-    } finally {
-      // 没排上队就当场放开，否则这个话题的按钮以后再也点不动了
-      if (!queued) this.clicking.delete(choice.threadId);
+    const task = await this.store.load(choice.threadId);
+    if (!task) return "找不到这个任务";
+    if (this.graph.ownerOf(task.stage) !== job) return "这一步已经不归我管了";
+    if (task.stage !== choice.stage) {
+      return `任务已经走到「${this.graph.at(task.stage).label}」，这张卡片过期了`;
     }
+
+    const message: Inbound = {
+      text: choice.text,
+      messageId: action.messageId,
+      chatId: action.chatId,
+      fromBot: false,
+      confirmed: choice.confirm,
+      // 用户填的盖住按钮上写死的：同一个名字，他填的那份才是他眼前看到的
+      data: { ...choice.data, ...action.formValue },
+    };
+
+    // 不 await：飞书等着这个响应，那一棒可能要跑很久，挂到后面去
+    void this.take(choice.threadId, {
+      job,
+      msg: message,
+      stage: choice.stage,
+    }).catch((err: unknown) => {
+      console.error(`[click] ${task.id} ${task.stage}`, err);
+    });
+
+    return "收到";
   }
 
   async resume(task: Session, from: Agent): Promise<void> {
@@ -108,19 +142,137 @@ export class Runner {
     return threads.length;
   }
 
+  /**
+   * 启动时把中断在半路的任务捡回来。
+   *
+   * `running` 在多副本下有两种相反的意思：上个进程死在半路留下的，和**另一个副本
+   * 此刻正跑着**的。分不出来就会在滚动发布时把人家手里的活抢过来重跑一遍——两个
+   * `claude -p` 同时改同一份代码。
+   *
+   * 锁就是这两者的分界线：有人在续租，说明它活着，跳过。
+   */
   private async recover(): Promise<Session[]> {
     const stuck = (await this.store.list()).filter(
       (task) => task.phase !== "waiting" && this.graph.ownerOf(task.stage),
     );
+
+    const mine: Session[] = [];
     for (const task of stuck) {
-      // 走同一条按话题串行的队列：捡回来的任务和新进来的消息不能撞在一起
-      void enqueue(task.threadId, () => this.step(task, null)).catch(
+      const job = this.graph.ownerOf(task.stage);
+      if (!job) continue;
+      if (await threadBusy(task.threadId)) continue;
+
+      mine.push(task);
+      // 和新进来的消息走同一条队列：捡回来的任务不能和它们撞在一起
+      void this.take(task.threadId, { job, msg: null, stage: null }).catch(
         (err: unknown) => {
           console.error(`[recover] ${task.id} ${task.stage}`, err);
         },
       );
     }
-    return stuck;
+    return mine;
+  }
+
+  /**
+   * 把一条待办放进这个话题的队列，然后试着抢锁开跑。
+   *
+   * 抢不到说明别处正推着这个话题——不用管，它跑完会把队列里剩下的一起消费掉，
+   * 包括刚放进去的这条。
+   */
+  private async take(
+    threadId: string,
+    event: PendingEvent,
+    opts: { hint?: boolean } = {},
+  ): Promise<void> {
+    await pushPending(threadId, event);
+
+    const lease = await acquireThread(threadId);
+    if (!lease) {
+      if (opts.hint) await this.hintBusy(threadId, event.job);
+      return;
+    }
+    await this.drain(lease, threadId);
+  }
+
+  /** 拿着锁把队列清空，清完放开 */
+  private async drain(lease: Lease, threadId: string): Promise<void> {
+    try {
+      for (;;) {
+        const raw = await popPending(threadId);
+        if (raw === null) break;
+
+        const event = this.parseEvent(raw);
+        if (!event) continue;
+        try {
+          await this.handle(threadId, event);
+        } catch (err) {
+          // 一条崩了不能把这个话题堵死，剩下的接着跑
+          console.error(`[drain] ${threadId}`, err);
+        }
+      }
+    } finally {
+      await lease.release();
+    }
+
+    // 放开锁到别人 push 之间有个窗口，落在那儿的那条谁都没接住。回头看一眼，
+    // 有就再抢一次接着清——不然它要等到下一条消息进来才会被顺带处理掉。
+    if ((await pendingCount(threadId)) > 0) {
+      const again = await acquireThread(threadId);
+      if (again) await this.drain(again, threadId);
+    }
+  }
+
+  /**
+   * 处理一条待办。
+   *
+   * 归属和过期都在这一刻重判：排队可能排了很久，任务早就不是入队时那个样子了。
+   */
+  private async handle(threadId: string, event: PendingEvent): Promise<void> {
+    const task = await this.store.load(threadId);
+    if (!task) return;
+    // 排队期间阶段变了，这条就不归当初收到它的那个角色了
+    if (this.graph.ownerOf(task.stage) !== event.job) return;
+    // 翻上去点了一张旧卡片
+    if (event.stage && task.stage !== event.stage) return;
+
+    await this.step(task, event.msg && !event.msg.fromBot ? event.msg : null);
+  }
+
+  /** 队列里读出来的东西对不上就跳过：可能是上个版本写进去的 */
+  private parseEvent(raw: string): PendingEvent | null {
+    try {
+      const parsed = PendingEventSchema.safeParse(JSON.parse(raw));
+      return parsed.success ? parsed.data : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * 告诉用户「正忙着，你这句排上了」。
+   *
+   * 研发那一棒能跑一小时，这期间插一句话没有任何反应，用起来就是「它挂了」。
+   *
+   * 只让当前这一棒的主人开口——四个角色都收到了同一条消息，不挡的话用户会收到
+   * 四遍一模一样的回复。同一个话题几分钟内也只说一次：等着的时候人可能连说好几
+   * 句，每句都回同一句话反而更烦。
+   */
+  private async hintBusy(threadId: string, job: AgentJob): Promise<void> {
+    const task = await this.store.load(threadId);
+    if (!task) return;
+
+    const node = this.graph.at(task.stage);
+    if (node.agent?.job !== job) return;
+    if (!(await claim(`hint:${threadId}`, HINT_TTL_SECONDS))) return;
+
+    try {
+      await node.agent.say(
+        task,
+        `正在${node.label}，你说的我记下了，这一轮跑完就处理。`,
+      );
+    } catch (err) {
+      console.error(`[hint] ${task.id}`, err);
+    }
   }
 
   /** 跑一棒。跑完要么停在原地等人说话，要么落盘 + @ 下一棒，然后就返回。 */

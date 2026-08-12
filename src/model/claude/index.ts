@@ -63,6 +63,15 @@ export class ClaudeModel extends Model {
       cwd: repo?.path ?? tmpdir(),
       stdin: opts.user,
       signal: opts.signal,
+      // 只有开着工具跑的才排队。写代码那一棒单独一个闸门——它最贵、跑最久，
+      // 和只读那几棒共用的话会把它们全饿死
+      gate: repo ? (repo.write ? "coding" : "reading") : null,
+      onQueued: opts.onProgress && ((waiting) => {
+        opts.onProgress?.({
+          kind: "queued",
+          text: waiting ? "前面还有任务在跑，轮到就开始" : "",
+        });
+      }),
       onLine: opts.onProgress && ((line) => this.report(line, opts.onProgress!)),
       args: [
         "-p",

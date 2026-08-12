@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { NS, redis } from "../redis.js";
+import { NS, redis } from "../redis/index.js";
 import { WorkflowStageEnum } from "../schema.js";
 
 /** 任务在 Redis 里的键：`agent-team:session:<话题 ID>` */
