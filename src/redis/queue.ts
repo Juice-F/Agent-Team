@@ -1,19 +1,6 @@
 import { randomUUID } from "node:crypto";
+import type { AgentJob, Inbound, WorkflowStage } from "../types.js";
 import { NS, redis } from "./index.js";
-
-/**
- * 同一个话题，同一时刻只让一个进程推。
- *
- * 原来这是进程内一张 `Map<threadId, Promise>`：后来的排在前一个后面，天然串行。
- * 多副本之后那张 Map 就是空气了——两个副本各有各的，谁也看不见谁，同一个任务被
- * 两边同时 load、各跑一棒、各 save，后写的整份盖掉前一个。
- *
- * 所以判定挪到 Redis：一把按话题的锁，加一条按话题的待办队列。
- *
- * 排的是**事件本身**而不是闭包——这是和原来最大的不同。闭包只在本进程里有意义，
- * 而这条队列要能被另一台机器上的副本接着消费，所以进队列的必须是能序列化、能
- * 重建出「该干什么」的东西。
- */
 
 /**
  * 锁的存活时间。
@@ -134,17 +121,38 @@ export async function threadBusy(threadId: string): Promise<boolean> {
   }
 }
 
+export interface PendingEvent {
+  job: AgentJob;
+  msg: Inbound | null;
+  stage: WorkflowStage | null;
+}
+
 /** 把一条待办放到队尾，返回放完之后队列有多长 */
 export async function pushPending(
   threadId: string,
-  event: unknown,
+  event: PendingEvent,
 ): Promise<number> {
   return (await redis.conn()).lPush(pendingKey(threadId), JSON.stringify(event));
 }
 
-/** 取队头那条，空了给 null */
-export async function popPending(threadId: string): Promise<string | null> {
-  return (await redis.conn()).rPop(pendingKey(threadId));
+/**
+ * 取队头那条，空了给 null。
+ *
+ * 读不出来就丢掉接着取——多半是上个版本写进去的。所以 null 只有一个意思：队列
+ * 真的空了。
+ */
+export async function popPending(threadId: string): Promise<PendingEvent | null> {
+  const client = await redis.conn();
+  for (;;) {
+    const raw = await client.rPop(pendingKey(threadId));
+    if (raw === null) return null;
+
+    try {
+      return JSON.parse(raw) as PendingEvent;
+    } catch {
+      // 连 JSON 都不是，丢掉
+    }
+  }
 }
 
 /** 还剩几条没处理 */

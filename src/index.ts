@@ -5,7 +5,6 @@ import { runner } from "./workflow/index.js";
 import { sessionStore } from "./session/index.js";
 import { type AgentJob } from "./types.js";
 
-
 async function main(): Promise<void> {
   console.log("Agent Team");
   for (const [job, label] of Object.entries(jobLabelMap)) {

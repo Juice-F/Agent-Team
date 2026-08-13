@@ -1,4 +1,5 @@
 import type { z } from "zod";
+import type { Card } from "./feishu/card.js";
 import type { WorkflowStageSchema } from "./schema.js";
 import type { Session, Turn } from "./session/index.js";
 import type { Runner } from "./workflow/runner.js";
@@ -126,5 +127,7 @@ export interface Agent {
   readonly openId: string;
   start(runner: Runner): Promise<void>;
   run(ctx: StepContext): Promise<StepResult>;
-  say(task: Session, text: string): Promise<void>;
+  botSay(task: Session, text: string): Promise<void>;
+  /** 冲着某一条消息回一张卡片，挂在它下面——回的是哪句，得让人看得出来 */
+  reply(messageId: string, card: Card): Promise<void>;
 }

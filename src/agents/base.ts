@@ -10,6 +10,7 @@ import type {
   WorkflowStage,
 } from "../types.js";
 import { FeishuChannel } from "../feishu/index.js";
+import type { Card } from "../feishu/card.js";
 
 export abstract class BaseAgent implements Agent {
   protected readonly bot: FeishuChannel;
@@ -28,8 +29,12 @@ export abstract class BaseAgent implements Agent {
     return this.bot.openId;
   }
 
-  async say(task: Session, text: string): Promise<void> {
+  async botSay(task: Session, text: string): Promise<void> {
     await this.bot.replyText(task.rootMessageId, text, { inThread: true });
+  }
+
+  async reply(messageId: string, card: Card): Promise<void> {
+    await this.bot.replyCard(messageId, card, { inThread: true });
   }
 
   async start(runner: Runner): Promise<void> {

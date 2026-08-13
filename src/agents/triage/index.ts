@@ -118,7 +118,6 @@ export class TriageAgent extends BaseAgent {
     const settled = result.verdict === "task";
 
     // 飞书这边传的是主群那条消息的 id：话题就是挂在它下面开出来的，两者一一对应。
-    // 钉钉那边没有话题这层，传群 id 就是「一个群只立一次项」。
     if (!(await claimFiling(msg.messageId))) {
       await this.bot.patchCard(card, cards.alreadyFiled());
       return;
