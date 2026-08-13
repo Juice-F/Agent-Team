@@ -133,7 +133,7 @@ export async function withGate<T>(
   const token = randomUUID();
 
   let waited = false;
-  for (;;) {
+  while (true) {
     if (signal?.aborted) throw abortReason(signal);
     if (await tryTake(kind, token)) break;
     if (!waited) {

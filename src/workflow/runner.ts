@@ -156,7 +156,7 @@ export class Runner {
    */
   private async drain(lease: Lease, threadId: string): Promise<void> {
     try {
-      for (;;) {
+      while (true) {
         const event = await popPending(threadId);
         if (event === null) break;
 

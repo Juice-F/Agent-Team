@@ -143,7 +143,7 @@ export async function pushPending(
  */
 export async function popPending(threadId: string): Promise<PendingEvent | null> {
   const client = await redis.conn();
-  for (;;) {
+  while (true) {
     const raw = await client.rPop(pendingKey(threadId));
     if (raw === null) return null;
 
