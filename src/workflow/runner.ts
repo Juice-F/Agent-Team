@@ -54,14 +54,13 @@ type PendingEvent = z.infer<typeof PendingEventSchema>;
 
 export class Runner {
   private readonly inflight = new Map<string, AbortController>();
+  private sessionStore!: SessionStore;
 
-  constructor(
-    private readonly graph: Workflow,
-    private readonly store: SessionStore,
-  ) {}
+  constructor(private readonly workflow: Workflow) {}
 
-  async start(): Promise<Session[]> {
-    await Promise.all(this.graph.agents.map((agent) => agent.start(this)));
+  async start(store: SessionStore): Promise<Session[]> {
+    this.sessionStore = store;
+    await Promise.all(this.workflow.agents.map((agent) => agent.start(this)));
     return this.recover();
   }
 
@@ -94,11 +93,11 @@ export class Runner {
     if (!parsed.success) return "这个按钮的参数不对，可能是旧版本发的卡片";
     const choice = parsed.data;
 
-    const task = await this.store.load(choice.threadId);
+    const task = await this.sessionStore.load(choice.threadId);
     if (!task) return "找不到这个任务";
-    if (this.graph.ownerOf(task.stage) !== job) return "这一步已经不归我管了";
+    if (this.workflow.ownerOf(task.stage) !== job) return "这一步已经不归我管了";
     if (task.stage !== choice.stage) {
-      return `任务已经走到「${this.graph.at(task.stage).label}」，这张卡片过期了`;
+      return `任务已经走到「${this.workflow.at(task.stage).label}」，这张卡片过期了`;
     }
 
     const message: Inbound = {
@@ -152,13 +151,13 @@ export class Runner {
    * 锁就是这两者的分界线：有人在续租，说明它活着，跳过。
    */
   private async recover(): Promise<Session[]> {
-    const stuck = (await this.store.list()).filter(
-      (task) => task.phase !== "waiting" && this.graph.ownerOf(task.stage),
+    const stuck = (await this.sessionStore.list()).filter(
+      (task) => task.phase !== "waiting" && this.workflow.ownerOf(task.stage),
     );
 
     const mine: Session[] = [];
     for (const task of stuck) {
-      const job = this.graph.ownerOf(task.stage);
+      const job = this.workflow.ownerOf(task.stage);
       if (!job) continue;
       if (await threadBusy(task.threadId)) continue;
 
@@ -228,10 +227,10 @@ export class Runner {
    * 归属和过期都在这一刻重判：排队可能排了很久，任务早就不是入队时那个样子了。
    */
   private async handle(threadId: string, event: PendingEvent): Promise<void> {
-    const task = await this.store.load(threadId);
+    const task = await this.sessionStore.load(threadId);
     if (!task) return;
     // 排队期间阶段变了，这条就不归当初收到它的那个角色了
-    if (this.graph.ownerOf(task.stage) !== event.job) return;
+    if (this.workflow.ownerOf(task.stage) !== event.job) return;
     // 翻上去点了一张旧卡片
     if (event.stage && task.stage !== event.stage) return;
 
@@ -258,10 +257,10 @@ export class Runner {
    * 句，每句都回同一句话反而更烦。
    */
   private async hintBusy(threadId: string, job: AgentJob): Promise<void> {
-    const task = await this.store.load(threadId);
+    const task = await this.sessionStore.load(threadId);
     if (!task) return;
 
-    const node = this.graph.at(task.stage);
+    const node = this.workflow.at(task.stage);
     if (node.agent?.job !== job) return;
     if (!(await claim(`hint:${threadId}`, HINT_TTL_SECONDS))) return;
 
@@ -277,18 +276,18 @@ export class Runner {
 
   /** 跑一棒。跑完要么停在原地等人说话，要么落盘 + @ 下一棒，然后就返回。 */
   private async step(task: Session, message: Inbound | null): Promise<Session> {
-    const node = this.graph.at(task.stage);
+    const node = this.workflow.at(task.stage);
     // 终点：没人认领，也就没人再推了
     if (!node.agent) {
       return task.phase === "waiting"
         ? task
-        : this.store.save({ ...task, phase: "waiting" });
+        : this.sessionStore.save({ ...task, phase: "waiting" });
     }
 
     const input = this.inputFor(task);
     const control = new AbortController();
     this.inflight.set(task.threadId, control);
-    let current = await this.store.save({ ...task, phase: "running" });
+    let current = await this.sessionStore.save({ ...task, phase: "running" });
 
     let result: StepResult;
     try {
@@ -304,7 +303,7 @@ export class Runner {
     } catch (err) {
       // 中断也好、跑挂了也好，这一棒都退回没开工：下次启动从这一棒重新开始，
       // 不会停在半路无人认领。
-      await this.store.save({ ...current, phase: "pending" });
+      await this.sessionStore.save({ ...current, phase: "pending" });
       throw err;
     } finally {
       this.inflight.delete(task.threadId);
@@ -329,12 +328,12 @@ export class Runner {
 
     // 这一棒说等人说话，就停在这儿
     if (result.kind === "wait") {
-      return this.store.save({ ...current, phase: "waiting" });
+      return this.sessionStore.save({ ...current, phase: "waiting" });
     }
 
     // 往前走还是打回上一棒都走这里，图上没有那条边就炸
-    const to = this.graph.advance(current.stage, result.to);
-    const next = await this.store.save({
+    const to = this.workflow.advance(current.stage, result.to);
+    const next = await this.sessionStore.save({
       ...current,
       stage: to,
       // 打回去的那一棒也是从头开始，所以一律 pending
@@ -353,7 +352,7 @@ export class Runner {
   }
 
   private async notify(task: Session, from: Agent): Promise<void> {
-    const node = this.graph.at(task.stage);
+    const node = this.workflow.at(task.stage);
     const to = node.agent;
     if (!to) return;
 

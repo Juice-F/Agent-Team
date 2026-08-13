@@ -1,4 +1,5 @@
 import { WorkflowBuilder } from "./graph.js";
+import { Runner } from "./runner.js";
 import { TriageAgent } from "../agents/triage/index.js";
 import { ProductAgent } from "../agents/product/index.js";
 import { DevAgent } from "../agents/dev/index.js";
@@ -43,3 +44,4 @@ export const workflow = new WorkflowBuilder({
   .edge("accepting", "spec") // 验收不通过：不通过的点回去重新拆解需求
   .build();
   
+export const runner = new Runner(workflow);

@@ -1,12 +1,10 @@
 import { jobLabelMap } from "./config.js";
 import { modelFor } from "./model/index.js";
 import { redis } from "./redis/index.js";
+import { runner } from "./workflow/index.js";
 import { sessionStore } from "./session/index.js";
-import { workflow } from "./workflow/index.js";
 import { type AgentJob } from "./types.js";
-import { type Runner } from "./workflow/runner.js";
 
-let runner: Runner | null = null;
 
 async function main(): Promise<void> {
   console.log("Agent Team");
@@ -18,7 +16,7 @@ async function main(): Promise<void> {
   }
 
   await redis.connect();
-  runner = await workflow.run(sessionStore);
+  await runner.start(sessionStore);
 }
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {

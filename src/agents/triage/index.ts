@@ -15,8 +15,6 @@ import * as cards from "./cards.js";
 import { SYSTEM } from "./prompt.js";
 import { TriageOutputSchema, type TriageOutput } from "./schema.js";
 
-type ClarifyingContext = Extract<StepContext, { stage: "clarifying" }>;
-
 export class TriageAgent extends BaseAgent {
   constructor() {
     super("triage", ["clarifying"]);
@@ -77,7 +75,7 @@ export class TriageAgent extends BaseAgent {
   }
 
   private async takeRepo(
-    ctx: ClarifyingContext,
+    ctx: StepContext,
     msg: Inbound,
   ): Promise<StepResult> {
     const prevTurns = ctx.task.turns[ctx.stage] ?? [];

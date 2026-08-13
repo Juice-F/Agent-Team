@@ -36,8 +36,8 @@ export abstract class BaseAgent implements Agent {
   async start(runner: Runner): Promise<void> {
     this.runner = runner;
     await this.bot.start({
-      onThread: (threadId, msg) => runner.deliver(this.job, threadId, msg),
       onGroup: (msg) => this.onGroup(msg),
+      onThread: (threadId, msg) => runner.deliver(this.job, threadId, msg),
       onCardAction: (action) => runner.click(this.job, action),
     });
     await this.bot.resolveOpenId();
