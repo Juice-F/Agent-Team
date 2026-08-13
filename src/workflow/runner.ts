@@ -122,10 +122,6 @@ export class Runner {
     return "收到";
   }
 
-  async resume(task: Session, from: Agent): Promise<void> {
-    await this.notify(task, from);
-  }
-
   // 打断这个话题上正在跑的那一棒 
   interrupt(threadId: string, reason = "外部中断"): boolean {
     const control = this.inflight.get(threadId);

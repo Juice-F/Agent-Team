@@ -13,7 +13,6 @@ import { FeishuChannel } from "../feishu/index.js";
 
 export abstract class BaseAgent implements Agent {
   protected readonly bot: FeishuChannel;
-  protected runner!: Runner;
 
   constructor(
     readonly job: AgentJob,
@@ -34,7 +33,6 @@ export abstract class BaseAgent implements Agent {
   }
 
   async start(runner: Runner): Promise<void> {
-    this.runner = runner;
     await this.bot.start({
       onGroup: (msg) => this.onGroup(msg),
       onThread: (threadId, msg) => runner.deliver(this.job, threadId, msg),
