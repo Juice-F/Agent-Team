@@ -31,7 +31,6 @@ class Tracer {
     }
 
     this.alive = true;
-    console.log("[trace] 链路通了：现场进对象存储，汇总进 pg trace_calls");
     return true;
   }
 
@@ -41,12 +40,6 @@ class Tracer {
     return new CallRecorder(seed, seed.ctx);
   }
 
-  /**
-   * 把 flush 挂到后台。
-   *
-   * 不 await 是有意的：coding 那一棒能吐几 MB，压缩加落盘要几百毫秒，
-   * 让它拖长这一棒毫无意义。代价是进程退出前得 drain 一次。
-   */
   track(flushing: Promise<void>): void {
     const guarded = flushing.catch((err: unknown) => {
       console.error("[trace] flush 挂了", err);

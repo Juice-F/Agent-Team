@@ -82,8 +82,6 @@ export class CallRecorder {
     try {
       await writeSpan(span, key);
     } catch (err) {
-      // 写不进去只能是日志。跟 gate.ts 那句「Redis 挂了就放行」同一个取舍：
-      // 观测手段绝不能变成主流程的故障点
       console.error(`[trace] ${span.taskId}/${span.stage} 汇总没落下`, err);
     }
   }
