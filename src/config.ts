@@ -53,6 +53,13 @@ export const redisConfig = {
   url: process.env["REDIS_URL"] ?? "redis://127.0.0.1:6379",
 } as const;
 
+export const postgresConfig = {
+  url:
+    process.env["POSTGRES_URL"] ??
+    "postgres://postgres:123456@127.0.0.1:5432/agent_team",
+  poolMax: 4,
+} as const;
+
 export const feishuConfig = {
   triage: {
     appId: required("FEISHU_TRIAGE_APP_ID"),
@@ -70,4 +77,13 @@ export const feishuConfig = {
     appId: required("FEISHU_REVIEW_APP_ID"),
     appSecret: required("FEISHU_REVIEW_APP_SECRET"),
   }
+} as const;
+
+export const traceConfig = {
+  /** 单个工具参数 / 结果留多少字符 */
+  fieldMax: 4000,
+  /** 原始流整体上限，超了留首尾。8MB 是压缩前的字符数 */
+  rawMax: 8 * 1024 * 1024,
+  /** stderr 留个尾巴就够，出错信息都在最后 */
+  stderrTail: 4000,
 } as const;

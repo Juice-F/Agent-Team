@@ -1,5 +1,6 @@
 import { modelFor, type OnProgress } from "../../model/index.js";
 import { router } from "../../router/index.js";
+import type { TraceContext } from "../../trace/index.js";
 import type { Inbound, StepContext, StepResult } from "../../types.js";
 import {
   sessionStore,
@@ -14,6 +15,22 @@ import { BaseAgent } from "../base.js";
 import * as cards from "./cards.js";
 import { SYSTEM } from "./prompt.js";
 import { TriageOutputSchema, type TriageOutput } from "./schema.js";
+
+/**
+ * 立项之前那几次调用的身份。
+ *
+ * 这时候还没有 Session，也就没有 task.id。用主群那条消息的 id 顶上——立项之后
+ * Session 会把它存成 rootMessageId，所以事后按同样的规则拼一次，就能把「判断
+ * 要不要立项」那几次调用和这个任务后面的链路接上。
+ *
+ * 只留字母数字，和 sessionStore.makeId 一个路数：taskId 会直接变成对象存储里
+ * 的目录名，带冒号的话 Windows 上根本建不出来。收在这儿而不是收在拼 key 的地方
+ * ——taskId 是一路带到底的身份，它自己就该是干净的。
+ */
+function inboxTrace(msg: Inbound): TraceContext {
+  const id = msg.messageId.replace(/[^a-zA-Z0-9]/g, "");
+  return { taskId: `inbox-${id}`, stage: "inbox", job: "triage" };
+}
 
 export class TriageAgent extends BaseAgent {
   constructor() {
@@ -43,6 +60,7 @@ export class TriageAgent extends BaseAgent {
     const result = await this.decide(
       prevTurns,
       ctx.message.text,
+      { taskId: ctx.task.id, stage: ctx.stage, job: this.job },
       undefined,
       ctx.signal,
     );
@@ -214,6 +232,7 @@ export class TriageAgent extends BaseAgent {
   private async decide(
     turns: Turn[],
     request: string,
+    trace: TraceContext,
     onProgress?: OnProgress,
     signal?: AbortSignal,
   ): Promise<TriageOutput> {
@@ -231,6 +250,7 @@ export class TriageAgent extends BaseAgent {
       schema: TriageOutputSchema,
       onProgress,
       signal,
+      trace,
     });
   }
 
@@ -242,7 +262,7 @@ export class TriageAgent extends BaseAgent {
     try {
       return {
         card: posted.messageId,
-        result: await this.decide([], msg.text, progress.on),
+        result: await this.decide([], msg.text, inboxTrace(msg), progress.on),
       };
     } catch (err) {
       await this.bot.patchCard(posted.messageId, cards.failed());

@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { z } from "zod";
 import { withGate, type GateKind } from "../redis/gate.js";
+import type { CallRecorder, TraceContext } from "../trace/index.js";
 import type { AgentSpec } from "../types.js";
 
 export class ModelError extends Error {}
@@ -43,6 +44,13 @@ export interface GenerateOptions<T extends z.ZodType> {
    * 「中断」就只是嘴上说说，模型还在那儿烧着额度。
    */
   signal?: AbortSignal;
+  /**
+   * 这次调用替谁跑的，用来记链路。不给就不记。
+   *
+   * 不是可有可无的装饰：多实例下同一个任务的几棒散在不同机器上，没有它，
+   * 日志里那些耗时和花费属于谁都对不上号。见 src/trace/。
+   */
+  trace?: TraceContext;
 }
 
 export interface RunResult {
@@ -116,22 +124,51 @@ export abstract class Model {
     gate?: GateKind | null;
     /** 开始排队时给 true，抢到槽位开跑时给 false。用来让卡片说句话 */
     onQueued?: (waiting: boolean) => void;
+    /**
+     * 这次调用的记录器，由 generate() 开、也由它收尾。
+     *
+     * 这一层只做两件事：告诉它什么时候真正开跑（在这之前都算排队），
+     * 以及把 CLI 的原始输出交给它——**包括超时和被中断那两条路**，
+     * 那才是最该留下现场的时候。
+     *
+     * 链路没通、或者这次调用没带上下文时，tracer.begin() 给的就是 null。
+     */
+    call?: CallRecorder | null;
   }): Promise<RunResult> {
-    if (!input.gate) return this.launch(input);
-    const gate = input.gate;
+    // 出错时 launch 的 Promise 直接 reject，局部的 stdout 就跟着没了。
+    // 交给外面这个盒子接着，超时/中断也能把已经吐出来的那半截留下来
+    const capture = { stdout: "", stderr: "" };
+    const onLine = input.call
+      ? (line: string) => {
+          input.call?.line(line);
+          input.onLine?.(line);
+        }
+      : input.onLine;
 
-    return withGate(
-      gate,
-      input.signal,
-      () => {
-        input.onQueued?.(false);
-        return this.launch(input);
-      },
-      () => {
-        console.log(`[gate] ${this.name} 排队等 ${gate} 槽位`);
-        input.onQueued?.(true);
-      },
-    );
+    try {
+      if (!input.gate) {
+        input.call?.started();
+        return await this.launch({ ...input, onLine, capture });
+      }
+
+      const gate = input.gate;
+      return await withGate(
+        gate,
+        input.signal,
+        () => {
+          input.onQueued?.(false);
+          // 抢到槽位这一刻才算开跑，前面等的那段单独记成 queuedMs
+          input.call?.started();
+          return this.launch({ ...input, onLine, capture });
+        },
+        () => {
+          console.log(`[gate] ${this.name} 排队等 ${gate} 槽位`);
+          input.onQueued?.(true);
+        },
+      );
+    } finally {
+      input.call?.attach(capture.stdout, capture.stderr);
+    }
   }
 
   private launch(input: {
@@ -141,6 +178,7 @@ export abstract class Model {
     cwd: string;
     onLine?: (line: string) => void;
     signal?: AbortSignal;
+    capture?: { stdout: string; stderr: string };
   }): Promise<RunResult> {
     return new Promise((resolve, reject) => {
       const child = spawn(input.bin, input.args, {
@@ -188,6 +226,7 @@ export abstract class Model {
       child.stdout.setEncoding("utf8");
       child.stdout.on("data", (chunk: string) => {
         stdout += chunk;
+        if (input.capture) input.capture.stdout = stdout;
         if (!input.onLine) return;
         pending += chunk;
         let index: number;
@@ -208,6 +247,7 @@ export abstract class Model {
       child.stderr.setEncoding("utf8");
       child.stderr.on("data", (chunk: string) => {
         stderr += chunk;
+        if (input.capture) input.capture.stderr = stderr;
       });
 
       child.on("error", (err: NodeJS.ErrnoException) => {

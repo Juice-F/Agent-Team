@@ -29,3 +29,5 @@ yarn-error.log*
 # 系统
 .DS_Store
 Thumbs.db
+# 本地对象存储数据（src/oss）
+.oss-data/

@@ -1,6 +1,7 @@
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { z } from "zod";
+import { tracer, type CallRecorder } from "../../trace/index.js";
 import {
   Model,
   ModelError,
@@ -55,8 +56,36 @@ export class ClaudeModel extends Model {
   async generate<T extends z.ZodType>(
     opts: GenerateOptions<T>,
   ): Promise<z.infer<T>> {
+    const call = tracer.begin({
+      ctx: opts.trace,
+      provider: this.name,
+      model: this.spec.model,
+      effort: this.spec.effort,
+      repo: opts.repo ?? null,
+      format: "claude-stream-json",
+    });
+    try {
+      const result = await this.attempt(opts, call);
+      call?.ok();
+      return result;
+    } catch (err) {
+      // CLI 退出码是 0 不代表这次成了——输出对不上 schema 照样是失败，
+      // 所以成败得在这儿定，不能在 run() 那一层定
+      call?.fail(err);
+      throw err;
+    } finally {
+      // 不 await：压缩加落盘几百毫秒，没道理让它拖长这一棒。退出前 tracer.drain()
+      if (call) tracer.track(call.flush());
+    }
+  }
+
+  private async attempt<T extends z.ZodType>(
+    opts: GenerateOptions<T>,
+    call: CallRecorder | null,
+  ): Promise<z.infer<T>> {
     const repo = opts.repo;
     const { stdout, stderr, code } = await this.run({
+      call,
       bin: this.bin(),
       // 纯生成放在临时目录跑，避免把本仓库的 CLAUDE.md / git 状态带进上下文；
       // 要动代码就得在目标仓库里跑，那份上下文反过来正是要的
