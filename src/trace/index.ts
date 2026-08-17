@@ -1,6 +1,7 @@
 import { oss } from "../oss/index.js";
 import { postgres } from "../postgres/index.js";
 import { CallRecorder } from "./call-recorder.js";
+import { initSpanTable } from "./utils.js";
 import type { SpanSeed } from "./type.js";
 
 class Tracer {
@@ -23,13 +24,14 @@ class Tracer {
 
     try {
       await postgres.connect();
+      await initSpanTable();
     } catch (err) {
       console.error("[trace] 链路不记：PG 连不上", err);
       return false;
     }
 
     this.alive = true;
-    console.log("[trace] 链路通了：现场落进对象存储");
+    console.log("[trace] 链路通了：现场进对象存储，汇总进 pg trace_calls");
     return true;
   }
 

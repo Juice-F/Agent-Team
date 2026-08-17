@@ -6,7 +6,8 @@
   "scripts": {
     "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
-    "build": "tsc"
+    "build": "tsc",
+    "trace": "tsx src/replay/index.ts"
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.72.0",

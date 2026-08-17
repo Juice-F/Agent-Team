@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { traceConfig } from "../config.js";
 import { parserFor, truncate, type StreamParser } from "./parse.js";
 import type { CallSpan, SpanSeed, TraceContext } from "./type.js";
-import { instanceId, rawKey, writeRaw } from "./utils.js";
+import { instanceId, rawKey, writeRaw, writeSpan } from "./utils.js";
 
 export class CallRecorder {
   private readonly callId = randomUUID();
@@ -61,6 +61,11 @@ export class CallRecorder {
 
     const span = this.toSpan();
     const { stdout, truncated } = this.clampRaw();
+
+    // 两边分开成败。现场写不进去，汇总那行照样要留下来——只是 raw_key 记 null，
+    // 别指向一个不存在的对象。反过来汇总写不进去就只能认了：留一个没人索引得到
+    // 的孤儿对象，靠目录的清理规则收走
+    let key: string | null = span.rawKey;
     try {
       await writeRaw({
         span,
@@ -70,9 +75,16 @@ export class CallRecorder {
         truncated,
       });
     } catch (err) {
+      key = null;
+      console.error(`[trace] ${span.taskId}/${span.stage} 现场没落下`, err);
+    }
+
+    try {
+      await writeSpan(span, key);
+    } catch (err) {
       // 写不进去只能是日志。跟 gate.ts 那句「Redis 挂了就放行」同一个取舍：
       // 观测手段绝不能变成主流程的故障点
-      console.error(`[trace] ${span.taskId}/${span.stage} 落盘失败`, err);
+      console.error(`[trace] ${span.taskId}/${span.stage} 汇总没落下`, err);
     }
   }
 
