@@ -1,4 +1,5 @@
 import { modelOf, type OnProgress } from "../model/index.js";
+import type { TraceContext } from "../trace/type.js";
 import { routerConfig, routerModels, type RouterConfig } from "./config.js";
 import { CLASSIFIER, JUDGE, RESPONDER } from "./prompt.js";
 import { matchRule } from "./rules.js";
@@ -22,6 +23,24 @@ export interface RouteDecision {
   readonly rule?: string;
   /** 规则自带的回复，有就直接发，别再往下走小模型那条链 */
   readonly reply?: string;
+}
+
+export interface RouterCall {
+  readonly signal?: AbortSignal;
+  /**
+   * 记链路用的身份。路由这三档不属于流程里任何一棒，但它们是**每条群消息都要跑**
+   * 的——分类一次、答一次、评一次，量比后面几棒大得多。不记的话，账单上最先长
+   * 起来的那块反而是看不见的。
+   */
+  readonly trace?: TraceContext;
+}
+
+/** 三档共用一个上下文，只把 job 换掉，事后才分得出是哪一档在花钱 */
+function as(
+  trace: TraceContext | undefined,
+  job: string,
+): { trace?: TraceContext } {
+  return trace ? { trace: { ...trace, job } } : {};
 }
 
 export type SimpleAnswer =
@@ -49,7 +68,7 @@ export type SimpleAnswer =
 export class ModelRouter {
   constructor(private readonly cfg: RouterConfig = routerConfig) {}
 
-  async route(text: string, signal?: AbortSignal): Promise<RouteDecision> {
+  async route(text: string, opts: RouterCall = {}): Promise<RouteDecision> {
     const hit = matchRule(text);
     if (hit) {
       return {
@@ -67,7 +86,8 @@ export class ModelRouter {
         system: CLASSIFIER,
         user: text,
         schema: RouteVerdictSchema,
-        signal: this.deadline(this.cfg.classifierTimeoutMs, signal),
+        signal: this.deadline(this.cfg.classifierTimeoutMs, opts.signal),
+        ...as(opts.trace, "classifier"),
       });
     } catch (err) {
       console.error("[router] 意图识别没跑出来，按 COMPLEX 走", err);
@@ -85,7 +105,7 @@ export class ModelRouter {
 
   async answer(
     text: string,
-    opts: { onProgress?: OnProgress; signal?: AbortSignal } = {},
+    opts: RouterCall & { onProgress?: OnProgress } = {},
   ): Promise<SimpleAnswer> {
     let draft;
     try {
@@ -95,6 +115,7 @@ export class ModelRouter {
         schema: ReplySchema,
         onProgress: opts.onProgress,
         signal: this.deadline(this.cfg.answerTimeoutMs, opts.signal),
+        ...as(opts.trace, "responder"),
       });
     } catch (err) {
       return {
@@ -116,6 +137,7 @@ export class ModelRouter {
         user: `用户说：\n\n${text}\n\n机器人的回复：\n\n${draft.reply}`,
         schema: JudgeSchema,
         signal: this.deadline(this.cfg.judgeTimeoutMs, opts.signal),
+        ...as(opts.trace, "judge"),
       });
     } catch (err) {
       return {

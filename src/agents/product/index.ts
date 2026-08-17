@@ -123,6 +123,7 @@ export class ProductAgent extends BaseAgent {
       repo: { path: dir, write: false },
       onProgress,
       signal: ctx.signal,
+      trace: { taskId: ctx.task.id, stage: ctx.stage, job: this.job },
     });
   }
   
@@ -201,6 +202,7 @@ export class ProductAgent extends BaseAgent {
       repo: { path: dir, write: false },
       onProgress,
       signal: ctx.signal,
+      trace: { taskId: ctx.task.id, stage: ctx.stage, job: this.job },
     });
   }
 }

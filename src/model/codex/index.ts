@@ -2,6 +2,8 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { z } from "zod";
+import type { CallRecorder } from "../../trace/call-recorder.js";
+import { tracer } from "../../trace/index.js";
 import { Model, ModelError, type GenerateOptions } from "../base.js";
 
 /**
@@ -24,6 +26,37 @@ export class CodexModel extends Model {
   async generate<T extends z.ZodType>(
     opts: GenerateOptions<T>,
   ): Promise<z.infer<T>> {
+    // format 给 none：`codex exec` 默认吐的是给人看的文本，没有结构化事件，
+    // 工具调用无从抽起。所以 codex 这一棒的现场只有耗时、排队、成败和原始
+    // stdout——工具链会如实显示成空的，不是没记，是拿不到。要补就得在下面
+    // args 里加 `--json`，再照它的事件格式写一个 parser（见 trace/parse.ts）
+    const call = tracer.begin({
+      ctx: opts.trace,
+      provider: this.name,
+      model: this.spec.model,
+      effort: this.spec.effort,
+      repo: opts.repo ?? null,
+      format: "none",
+    });
+    try {
+      const result = await this.attempt(opts, call);
+      call?.ok();
+      return result;
+    } catch (err) {
+      // CLI 退出码是 0 不代表这次成了——输出对不上 schema 照样是失败，
+      // 所以成败得在这儿定，不能在 run() 那一层定
+      call?.fail(err);
+      throw err;
+    } finally {
+      // 不 await：压缩加落盘几百毫秒，没道理让它拖长这一棒。退出前 tracer.drain()
+      if (call) tracer.track(call.flush());
+    }
+  }
+
+  private async attempt<T extends z.ZodType>(
+    opts: GenerateOptions<T>,
+    call: CallRecorder | null,
+  ): Promise<z.infer<T>> {
     const dir = await mkdtemp(join(tmpdir(), "agent-team-codex-"));
     const schemaFile = join(dir, "schema.json");
     const outFile = join(dir, "last-message.txt");
@@ -36,6 +69,7 @@ export class CodexModel extends Model {
       );
 
       const { stdout, stderr, code } = await this.run({
+        call,
         bin: this.bin(),
         // 要看/要动代码就在目标仓库里跑；纯生成留在临时目录，碰不到任何仓库
         cwd: opts.repo?.path ?? dir,

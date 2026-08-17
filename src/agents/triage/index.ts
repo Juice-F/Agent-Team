@@ -1,6 +1,6 @@
 import { modelFor, type OnProgress } from "../../model/index.js";
 import { router } from "../../router/index.js";
-import type { TraceContext } from "../../trace/index.js";
+import type { TraceContext } from "../../trace/type.js";
 import type { Inbound, StepContext, StepResult } from "../../types.js";
 import {
   sessionStore,
@@ -27,9 +27,9 @@ import { TriageOutputSchema, type TriageOutput } from "./schema.js";
  * 的目录名，带冒号的话 Windows 上根本建不出来。收在这儿而不是收在拼 key 的地方
  * ——taskId 是一路带到底的身份，它自己就该是干净的。
  */
-function inboxTrace(msg: Inbound): TraceContext {
+function inboxTrace(msg: Inbound, job = "triage"): TraceContext {
   const id = msg.messageId.replace(/[^a-zA-Z0-9]/g, "");
-  return { taskId: `inbox-${id}`, stage: "inbox", job: "triage" };
+  return { taskId: `inbox-${id}`, stage: "inbox", job };
 }
 
 export class TriageAgent extends BaseAgent {
@@ -203,7 +203,9 @@ export class TriageAgent extends BaseAgent {
   }
 
   private async replySimpleQuery(msg: Inbound): Promise<boolean> {
-    const decision = await router.route(msg.text);
+    const decision = await router.route(msg.text, {
+      trace: inboxTrace(msg, "router"),
+    });
     console.log(`[router decision] ${JSON.stringify(decision)}`);
 
     if (decision.label !== "SIMPLE") return false;
@@ -214,7 +216,9 @@ export class TriageAgent extends BaseAgent {
       return true;
     }
 
-    const answer = await router.answer(msg.text);
+    const answer = await router.answer(msg.text, {
+      trace: inboxTrace(msg, "router"),
+    });
     console.log(`[router answer] ${JSON.stringify(answer)}`);
 
     if (answer.kind === "escalate") {

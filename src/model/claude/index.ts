@@ -1,7 +1,8 @@
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { z } from "zod";
-import { tracer, type CallRecorder } from "../../trace/index.js";
+import type { CallRecorder } from "../../trace/call-recorder.js";
+import { tracer } from "../../trace/index.js";
 import {
   Model,
   ModelError,

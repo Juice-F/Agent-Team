@@ -2,7 +2,8 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { z } from "zod";
 import { withGate, type GateKind } from "../redis/gate.js";
-import type { CallRecorder, TraceContext } from "../trace/index.js";
+import type { CallRecorder } from "../trace/call-recorder.js";
+import type { TraceContext } from "../trace/type.js";
 import type { AgentSpec } from "../types.js";
 
 export class ModelError extends Error {}

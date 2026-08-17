@@ -81,6 +81,7 @@ export class DevAgent extends BaseAgent {
       repo: { path: dir, write: true },
       onProgress,
       signal: ctx.signal,
+      trace: { taskId: ctx.task.id, stage: ctx.stage, job: this.job },
     });
   }
 
