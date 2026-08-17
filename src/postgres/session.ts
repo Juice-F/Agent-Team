@@ -1,21 +1,7 @@
 import { z } from "zod";
-import { NS, redis } from "../redis/index.js";
 import { WorkflowStageEnum } from "../schema.js";
-
-/** 任务在 Redis 里的键：`agent-team:session:<话题 ID>` */
-const KEY_PREFIX = `${NS}:session:`;
-
-/**
- * 一条任务多久没写过就让 Redis 自己收走。
- *
- * 每次 save 都重新盖上，所以算的是「最后一次动它到现在」：还在推进的任务永远不会
- * 过期，被收走的是聊崩了、或者早就收了工的。30 天是按人来定的——一个需求停在等人
- * 确认的状态上放一个月还没人管，它就已经不是活的了。
- */
-const TTL_SECONDS = 7 * 24 * 3600;
-
-/** SCAN 一趟捞多少。纯粹是 round-trip 次数和单次阻塞时长之间的取舍 */
-const SCAN_COUNT = 200;
+import { postgres } from "./index.js";
+import { initSessionTable } from "./table.js";
 
 export const TurnSchema = z.object({
   role: z.enum(["user", "assistant"]),
@@ -105,7 +91,7 @@ export const SessionSchema = z.object({
    *   running  正在跑
    *   waiting  跑完了，停下来等人说话（终点也算，反正没人再推它）
    *
-   * 中断恢复全靠它：进程死在半路，文件里留着的就是 running，下次启动一眼看得
+   * 中断恢复全靠它：进程死在半路，库里留着的就是 running，下次启动一眼看得
    * 出这棒没跑完。只有 waiting 是「本来就该停在这」，别去动它。
    */
   phase: z.enum(["pending", "running", "waiting"]).default("pending"),
@@ -133,9 +119,65 @@ export const SessionSchema = z.object({
 });
 export type Session = z.infer<typeof SessionSchema>;
 
+interface SessionRow {
+  thread_id: string;
+  id: string;
+  chat_id: string;
+  root_msg_id: string;
+  title: string;
+  request: string;
+  settled: boolean;
+  repo_source: string | null;
+  plan: string;
+  review_note: string;
+  accept_note: string;
+  stage: string;
+  phase: string;
+  turns: unknown;
+  stage_record: unknown;
+  created_at: Date;
+  updated_at: Date;
+}
+
+/** 列顺序在 insert 里要和 values() 一一对应，别单独改一边 */
+const COLUMNS = `thread_id, id, chat_id, root_msg_id, title, request, settled,
+  repo_source, plan, review_note, accept_note, stage, phase, turns,
+  stage_record, created_at, updated_at`;
+
+const PLACEHOLDERS = "$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17";
+
+/** 冲突时除了主键和建表时间，其余全部盖掉 */
+const OVERWRITE = [
+  "id",
+  "chat_id",
+  "root_msg_id",
+  "title",
+  "request",
+  "settled",
+  "repo_source",
+  "plan",
+  "review_note",
+  "accept_note",
+  "stage",
+  "phase",
+  "turns",
+  "stage_record",
+  "updated_at",
+]
+  .map((c) => `${c} = excluded.${c}`)
+  .join(", ");
+
 export class SessionStore {
-  private keyOf(threadId: string): string {
-    return `${KEY_PREFIX}${threadId}`;
+  /**
+   * 连上 + 建表。启动时叫一次。
+   *
+   * 不 catch：这是业务状态的真相来源，连不上就没法干活，让它崩在启动那一刻，
+   * 比带着一个连不上的池子跑起来、等第一条消息进来才炸强。和 tracer.init()
+   * 那种「探不通就降级返回 false」是两种东西——观测可以丢，任务不能。
+   */
+  async init(): Promise<void> {
+    await postgres.connect();
+    await initSessionTable();
   }
 
   /** Task-20260805-2345-a1b2 */
@@ -152,65 +194,115 @@ export class SessionStore {
   }
 
   async load(threadId: string): Promise<Session | null> {
-    const raw = await (await redis.conn()).get(this.keyOf(threadId));
-    return raw === null ? null : this.parse(raw);
+    const rows = await postgres.rows<SessionRow>(
+      `select ${COLUMNS} from sessions where thread_id = $1`,
+      [threadId],
+    );
+    return rows[0] ? this.parse(rows[0]) : null;
   }
 
-  /** 整份覆盖写，顺手把过期时间重新盖上 */
+  /** 整份覆盖写 */
   async save(task: Session): Promise<Session> {
     const next: Session = { ...task, updatedAt: new Date().toISOString() };
-    await (await redis.conn()).set(this.keyOf(task.threadId), JSON.stringify(next), {
-      expiration: { type: "EX", value: TTL_SECONDS },
-    });
+    await postgres.exec(
+      `insert into sessions (${COLUMNS}) values (${PLACEHOLDERS})
+       on conflict (thread_id) do update set ${OVERWRITE}`,
+      values(next),
+    );
     return next;
   }
 
+  /**
+   * 抢着建一条。已经有了就用赢的那条往下走。
+   *
+   * 对应原来的 `SET NX`：立项那一刻可能有两条消息同时进来（见 once.claimFiling），
+   * 谁先插进去谁说了算，输的那个不能覆盖赢的。
+   */
   async create(task: Session): Promise<{ created: boolean; task: Session }> {
     const next: Session = { ...task, updatedAt: new Date().toISOString() };
-    const ok = await (await redis.conn()).set(
-      this.keyOf(task.threadId),
-      JSON.stringify(next),
-      { condition: "NX", expiration: { type: "EX", value: TTL_SECONDS } },
+    const inserted = await postgres.exec(
+      `insert into sessions (${COLUMNS}) values (${PLACEHOLDERS})
+       on conflict (thread_id) do nothing`,
+      values(next),
     );
-    if (ok) return { created: true, task: next };
-    // 抢输了就用赢的那条往下走。刚好在这一瞬过期（几乎不可能）就退回自己手里这份
+    if (inserted > 0) return { created: true, task: next };
+
+    // 抢输了就用赢的那条。刚好在这一瞬被删掉（几乎不可能）就退回自己手里这份
     const existing = await this.load(task.threadId);
     return { created: false, task: existing ?? next };
   }
 
   /**
-   * 全部任务，给启动时捡漏用。
+   * 还没停下的任务，给启动时捡漏用。
    *
-   * 用 SCAN 不用 KEYS：KEYS 会把整个 Redis 阻塞住，而这个库不只我们在用。代价是
-   * SCAN 给的是「大致这些」——扫的过程中新建的可能扫不到。对捡漏来说够了：那种任务
-   * 本来就是刚建的，有人正管着它。
+   * 过滤下推到 SQL，不是全捞回来在内存里筛：waiting 是「本来就该停在这」，收了工
+   * 的任务会一直躺在表里越积越多，没道理每次启动都读一遍。原来在 Redis 里是靠
+   * 7 天 TTL 自己收走的，现在数据不过期了，这个过滤就必须下推。
    */
-  async list(): Promise<Session[]> {
-    const client = await redis.conn();
-    const tasks: Session[] = [];
-
-    for await (const keys of client.scanIterator({
-      MATCH: `${KEY_PREFIX}*`,
-      COUNT: SCAN_COUNT,
-    })) {
-      if (keys.length === 0) continue;
-      for (const raw of await client.mGet(keys)) {
-        // 扫到和取值之间过期了就是 null，跳过
-        const task = raw === null ? null : this.parse(raw);
-        if (task) tasks.push(task);
-      }
-    }
-    return tasks;
+  async listActive(): Promise<Session[]> {
+    const rows = await postgres.rows<SessionRow>(
+      `select ${COLUMNS} from sessions where phase <> 'waiting' order by updated_at`,
+    );
+    return rows
+      .map((row) => this.parse(row))
+      .filter((task): task is Session => task !== null);
   }
 
-  private parse(raw: string): Session | null {
-    try {
-      const parsed = SessionSchema.safeParse(JSON.parse(raw));
-      return parsed.success ? parsed.data : null;
-    } catch {
-      return null;
-    }
+  /**
+   * 行 → Session，顺手过一遍 schema。
+   *
+   * 校验不是多余的：jsonb 那两列 PG 只保证是合法 JSON，不保证形状对；老版本写进去
+   * 的行、手工改过的行都可能对不上。坏数据当「没这条」处理，比让它带着错误的形状
+   * 往下流强——但要打一行，不然就是悄悄丢任务。
+   */
+  private parse(row: SessionRow): Session | null {
+    const parsed = SessionSchema.safeParse({
+      id: row.id,
+      threadId: row.thread_id,
+      chatId: row.chat_id,
+      rootMessageId: row.root_msg_id,
+      title: row.title,
+      request: row.request,
+      settled: row.settled,
+      repo: row.repo_source === null ? null : { source: row.repo_source },
+      plan: row.plan,
+      reviewNote: row.review_note,
+      acceptNote: row.accept_note,
+      stage: row.stage,
+      phase: row.phase,
+      turns: row.turns,
+      stageRecord: row.stage_record,
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString(),
+    });
+    if (parsed.success) return parsed.data;
+
+    console.error(`[session] ${row.thread_id} 这行读不出来`, parsed.error.issues);
+    return null;
   }
+}
+
+/** 顺序和 COLUMNS 一一对应，别单独改一边 */
+function values(task: Session): unknown[] {
+  return [
+    task.threadId,
+    task.id,
+    task.chatId,
+    task.rootMessageId,
+    task.title,
+    task.request,
+    task.settled,
+    task.repo?.source ?? null,
+    task.plan,
+    task.reviewNote,
+    task.acceptNote,
+    task.stage,
+    task.phase,
+    JSON.stringify(task.turns),
+    JSON.stringify(task.stageRecord),
+    task.createdAt,
+    task.updatedAt,
+  ];
 }
 
 export const sessionStore = new SessionStore();

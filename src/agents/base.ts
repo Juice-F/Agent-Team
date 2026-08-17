@@ -1,6 +1,6 @@
 import { feishuConfig } from "../config.js";
 import type { Runner } from "../workflow/runner.js";
-import type { Session } from "../session/index.js";
+import type { Session } from "../postgres/session.js";
 import type {
   Agent,
   AgentJob,

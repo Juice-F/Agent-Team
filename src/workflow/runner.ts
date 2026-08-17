@@ -19,7 +19,7 @@ import {
   type PendingEvent,
 } from "../redis/queue.js";
 import { claim } from "../redis/once.js";
-import type { Session, SessionStore } from "../session/index.js";
+import type { Session, SessionStore } from "../postgres/session.js";
 import type { Workflow } from "./graph.js";
 
 /** 被 interrupt() 打断，不是自己跑挂的 */
@@ -129,8 +129,9 @@ export class Runner {
    * 锁就是这两者的分界线：有人在续租，说明它活着，跳过。
    */
   private async recover(): Promise<Session[]> {
-    const stuck = (await this.sessionStore.list()).filter(
-      (task) => task.phase !== "waiting" && this.workflow.ownerOf(task.stage),
+    // phase 那一半的过滤下推到 SQL 了，这儿只剩「这个阶段有没有人认领」
+    const stuck = (await this.sessionStore.listActive()).filter((task) =>
+      this.workflow.ownerOf(task.stage),
     );
 
     const mine: Session[] = [];

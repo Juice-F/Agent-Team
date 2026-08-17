@@ -1,6 +1,6 @@
 import { generateCard, type Card, type CardButton } from "../../feishu/card.js";
 import type { CardChoice } from "../../schema.js";
-import type { Session, TaskRepo } from "../../session/index.js";
+import type { Session, TaskRepo } from "../../postgres/session.js";
 import { repoLabel, type RepoProblem } from "../../workspace/index.js";
 
 const HOW_TO = [

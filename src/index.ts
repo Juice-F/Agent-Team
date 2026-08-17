@@ -2,8 +2,8 @@ import { jobLabelMap } from "./config.js";
 import { modelFor } from "./model/index.js";
 import { postgres } from "./postgres/index.js";
 import { redis } from "./redis/index.js";
+import { sessionStore } from "./postgres/session.js";
 import { runner } from "./workflow/index.js";
-import { sessionStore } from "./session/index.js";
 import { tracer } from "./trace/index.js";
 import { type AgentJob } from "./types.js";
 
@@ -16,7 +16,10 @@ async function main(): Promise<void> {
     );
   }
 
+  await postgres.connect();
   await redis.connect();
+  
+  await sessionStore.init();
   await tracer.init();
   await runner.start(sessionStore);
 }

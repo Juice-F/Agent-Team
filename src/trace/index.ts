@@ -1,7 +1,7 @@
 import { oss } from "../oss/index.js";
 import { postgres } from "../postgres/index.js";
 import { CallRecorder } from "./call-recorder.js";
-import { initSpanTable } from "./utils.js";
+import { initSpanTable } from "./table.js";
 import type { SpanSeed } from "./type.js";
 
 class Tracer {

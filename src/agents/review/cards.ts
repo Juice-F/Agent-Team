@@ -1,5 +1,5 @@
 import { generateCard, type Card } from "../../feishu/card.js";
-import type { Session } from "../../session/index.js";
+import type { Session } from "../../postgres/session.js";
 import type { CardChoice } from "../../schema.js";
 import type { ReviewOutput } from "./schema.js";
 

@@ -7,7 +7,7 @@ import {
   type Session,
   type TaskRepo,
   type Turn,
-} from "../../session/index.js";
+} from "../../postgres/session.js";
 import { workspace } from "../../workspace/index.js";
 import { claimFiling, releaseFiling } from "../../redis/once.js";
 import type { Posted } from "../../feishu/index.js";

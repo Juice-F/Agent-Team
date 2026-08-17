@@ -1,7 +1,7 @@
 import { modelFor, type OnProgress } from "../../model/index.js";
 import { workspace } from "../../workspace/index.js";
 import type { Inbound, StepContext, StepResult } from "../../types.js";
-import type { Turn } from "../../session/index.js";
+import type { Turn } from "../../postgres/session.js";
 import { BaseAgent } from "../base.js";
 import * as cards from "./cards.js";
 import { ACCEPT_SYSTEM, SPEC_SYSTEM } from "./prompt.js";

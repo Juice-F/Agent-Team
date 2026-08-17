@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
-import type { Session, TaskRepo } from "../session/index.js";
+import type { Session, TaskRepo } from "../postgres/session.js";
 
 export class WorkspaceError extends Error {}
 

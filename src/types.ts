@@ -1,7 +1,7 @@
 import type { z } from "zod";
 import type { Card } from "./feishu/card.js";
 import type { WorkflowStageSchema } from "./schema.js";
-import type { Session, Turn } from "./session/index.js";
+import type { Session, Turn } from "./postgres/session.js";
 import type { Runner } from "./workflow/runner.js";
 
 export type Provider = "claude" | "codex";
